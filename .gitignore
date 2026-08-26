@@ -1,0 +1,14 @@
+# 编译产物（make all-platforms 输出到 build/）
+/build/
+lan_proxy
+lanproxy
+*.exe
+
+# 运行时生成的路由台账
+routes.json
+
+# 编辑器 / 系统杂项
+.DS_Store
+*.swp
+.idea/
+.vscode/

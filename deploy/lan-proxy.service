@@ -1,0 +1,14 @@
+[Unit]
+Description=LAN Multi-Router & SOCKS5 Proxy Manager
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/usr/local/bin
+ExecStart=/usr/local/bin/lan_proxy -socks-port 1080 -start-proxy -api-port 8080 -user admin -pass your_secure_password
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

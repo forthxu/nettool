@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网络管理工具</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+    <div class="max-w-7xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+                <h1 class="text-3xl font-bold text-indigo-600">网络管理工具</h1>
+                <p class="text-sm text-gray-500 mt-1">多路由器网关调度、SOCKS5 代理控制与实时流量监控</p>
+            </div>
+            <div id="status-badge" class="flex items-center gap-2 bg-green-100 text-green-800 px-4 py-2 rounded-full text-sm font-medium">
+                <span class="w-3 h-3 bg-green-500 rounded-full animate-pulse"></span>
+                <span>系统运行中</span>
+            </div>
+        </header>
+
+        <!-- Tabs -->
+        <nav class="flex gap-6 border-b mb-8">
+            <button id="tab-btn-proxy" onclick="switchTab('proxy')" class="pb-3 -mb-px text-sm font-medium transition">SOCKS5 代理</button>
+            <button id="tab-btn-routes" onclick="switchTab('routes')" class="pb-3 -mb-px text-sm font-medium transition">路由管理</button>
+        </nav>
+
+        <!-- ============ Tab 1: SOCKS5 代理 ============ -->
+        <section id="tab-proxy">
+            <!-- Stats Overview Cards -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">总下行流量 (Download)</div>
+                    <div id="stat-bytes-in" class="text-2xl font-bold text-indigo-600 mt-2">0 B</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">总上行流量 (Upload)</div>
+                    <div id="stat-bytes-out" class="text-2xl font-bold text-emerald-600 mt-2">0 B</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">当前活跃连接数</div>
+                    <div id="stat-active-conns" class="text-2xl font-bold text-amber-600 mt-2">0</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">历史累计连接数</div>
+                    <div id="stat-total-conns" class="text-2xl font-bold text-gray-700 mt-2">0</div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Proxy Config Card -->
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 lg:col-span-1">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-lg font-semibold text-gray-700">SOCKS5 代理配置</h2>
+                        <button type="button" id="proxy-toggle-btn" onclick="toggleProxy()" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-400">…</button>
+                    </div>
+                    <div class="space-y-4">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-500">运行状态:</span>
+                            <span id="proxy-state" class="font-semibold text-gray-400">读取中…</span>
+                        </div>
+                        <div class="flex justify-between text-sm -mt-2">
+                            <span class="text-gray-500">代理启动于:</span>
+                            <span id="proxy-started-at" class="text-gray-700 font-mono text-xs">-</span>
+                        </div>
+                        <div class="flex justify-between text-sm -mt-2">
+                            <span class="text-gray-500">已运行:</span>
+                            <span id="proxy-uptime" class="text-gray-700 text-xs">-</span>
+                        </div>
+                        <div id="process-uptime" class="text-xs text-gray-400 -mt-2"></div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">监听端口</label>
+                            <input type="number" id="new-socks-port" value="1080" oninput="syncEgressCommand()" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <div class="flex justify-between items-center mb-1">
+                                <label for="outbound-ip-select" class="block text-xs text-gray-500">代理出口 IP (绑定本地网卡走指定网关)</label>
+                                <button type="button" onclick="loadInterfaces()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">刷新</button>
+                            </div>
+                            <select id="outbound-ip-select" onchange="onOutboundSelectChange()" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono bg-white">
+                                <option value="">留空（默认自动选择）</option>
+                                <option value="__manual__">手动输入…</option>
+                            </select>
+                            <input type="text" id="new-outbound-ip" placeholder="例: 192.168.1.20" class="hidden w-full mt-2 px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
+                            <p class="mt-2 text-xs text-gray-400 leading-relaxed">绑定源 IP 后是否真的走该网关，取决于系统路由：同一网卡上的多个 IP 通常仍走同一条默认路由，需要策略路由或在「路由管理」里按目标网段指定网关。</p>
+                        </div>
+                        <button id="proxy-save-btn" onclick="updateProxyConfig()" class="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm hover:bg-indigo-700 transition font-medium">保存配置</button>
+
+                        <!-- 出口公网 IP 探测 -->
+                        <div class="pt-4 border-t">
+                            <div class="flex justify-between items-center mb-1">
+                                <span class="text-xs text-gray-500">实际出口公网 IP</span>
+                                <button type="button" id="egress-check-btn" onclick="checkEgressIP()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">检测</button>
+                            </div>
+                            <div id="egress-result" class="text-sm font-mono text-gray-400">尚未检测</div>
+                            <div id="egress-detail" class="text-xs text-gray-400 mt-1 leading-relaxed whitespace-pre-line"></div>
+                            <div class="mt-2 text-xs text-gray-400">
+                                等价命令：
+                                <code id="egress-command" class="block mt-1 px-2 py-1.5 bg-gray-50 border rounded text-gray-600 font-mono break-all cursor-pointer" onclick="copyEgressCommand()" title="点击复制">curl --socks5-hostname 127.0.0.1:1080 'https://myip.ipip.net/'</code>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active Connections Table -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden lg:col-span-2">
+                    <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50/50">
+                        <h2 class="text-base font-semibold text-gray-700">实时连接监控 (Active Connections)</h2>
+                        <span class="text-xs text-gray-400">每2秒自动刷新</span>
+                    </div>
+                    <div class="overflow-x-auto max-h-[420px] overflow-y-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider sticky top-0">
+                                    <th class="px-4 py-3 font-medium">源地址 (Client)</th>
+                                    <th class="px-4 py-3 font-medium">目标地址 (Target)</th>
+                                    <th class="px-4 py-3 font-medium text-right">流入 (Down)</th>
+                                    <th class="px-4 py-3 font-medium text-right">流出 (Up)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="conns-table-body" class="divide-y divide-gray-200 text-xs font-mono">
+                                <tr>
+                                    <td colspan="4" class="px-4 py-4 text-center text-gray-400">暂无活跃连接</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ Tab 2: 路由管理 ============ -->
+        <section id="tab-routes" class="hidden">
+            <!-- Add Route Card -->
+            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+                <h2 class="text-lg font-semibold text-gray-700 mb-4">新增自定义路由规则</h2>
+                <form id="add-route-form" onsubmit="addRoute(event)" class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">目标网段 / IP / 域名</label>
+                        <input type="text" id="dest" placeholder="例: 192.168.2.0/24 或 example.com" required class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">网关路由器 IP</label>
+                        <input type="text" id="gateway" placeholder="例: 192.168.1.254" required list="gateway-options" class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
+                        <datalist id="gateway-options"></datalist>
+                    </div>
+                    <div class="flex items-end">
+                        <button type="submit" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-emerald-700 transition">添加路由</button>
+                    </div>
+                </form>
+                <p class="mt-3 text-xs text-gray-400">按目标网段指定下一跳，修改的是整机内核路由表（需要 root 权限），对所有进程生效，不只是本代理。</p>
+                <p class="mt-1 text-xs text-gray-400">填域名时会当场解析 A 记录，为每个 IPv4 下发一条 <span class="font-mono">/32</span> 主机路由，并记录来源域名与解析时间。<span id="domain-refresh-hint">之后会定期自动重新解析</span>：新增缺失的 IP、撤下已不再解析到的；DNS 解析失败时保留现有路由不动。</p>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Custom Routes Table -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b bg-gray-50/50">
+                        <div class="flex justify-between items-center">
+                            <h2 class="text-base font-semibold text-gray-700">程序托管的自定义路由</h2>
+                            <div class="flex items-center gap-3">
+                                <button id="restore-all-btn" onclick="restoreRoutes()" class="hidden text-xs text-amber-700 hover:text-amber-900 font-medium">重新下发失效路由</button>
+                                <button onclick="pauseAll(true)" class="text-xs text-gray-500 hover:text-gray-700 font-medium">全部暂停</button>
+                                <button onclick="pauseAll(false)" class="text-xs text-emerald-600 hover:text-emerald-800 font-medium">全部恢复</button>
+                                <button onclick="loadRoutes()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">刷新</button>
+                            </div>
+                        </div>
+                        <div id="routes-state-hint" class="text-xs text-gray-400 mt-1"></div>
+                    </div>
+                    <div class="overflow-x-auto max-h-[420px] overflow-y-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider sticky top-0">
+                                    <th class="px-4 py-3 font-medium">目标 / 来源</th>
+                                    <th class="px-4 py-3 font-medium">网关 IP</th>
+                                    <th class="px-4 py-3 font-medium text-right">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="routes-table-body" class="divide-y divide-gray-200 text-sm">
+                                <tr>
+                                    <td colspan="3" class="px-4 py-4 text-center text-gray-400">正在加载...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- System Routes Table -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50/50">
+                        <h2 class="text-base font-semibold text-gray-700">操作系统当前完整路由表</h2>
+                        <button onclick="loadSystemRoutes()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">刷新</button>
+                    </div>
+                    <div class="overflow-x-auto max-h-[420px] overflow-y-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider sticky top-0">
+                                    <th class="px-4 py-3 font-medium">路由详情 / Raw Line</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sys-routes-table-body" class="divide-y divide-gray-200 text-xs font-mono">
+                                <tr>
+                                    <td class="px-4 py-4 text-center text-gray-400">正在加载系统路由...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const TABS = ['proxy', 'routes'];
+        const ACTIVE_TAB_CLASSES = ['border-b-2', 'border-indigo-600', 'text-indigo-600'];
+        const INACTIVE_TAB_CLASSES = ['text-gray-500', 'hover:text-gray-700'];
+        let activeTab = 'proxy';
+        let routesTabLoaded = false;
+
+        function switchTab(name) {
+            if (!TABS.includes(name)) return;
+            activeTab = name;
+
+            TABS.forEach(t => {
+                const isActive = t === name;
+                document.getElementById('tab-' + t).classList.toggle('hidden', !isActive);
+                const btn = document.getElementById('tab-btn-' + t);
+                btn.classList.remove(...ACTIVE_TAB_CLASSES, ...INACTIVE_TAB_CLASSES);
+                btn.classList.add(...(isActive ? ACTIVE_TAB_CLASSES : INACTIVE_TAB_CLASSES));
+            });
+
+            try { localStorage.setItem('lan-proxy-active-tab', name); } catch (err) { /* 隐私模式下忽略 */ }
+
+            // 路由数据只在首次进入该标签页时拉取，之后靠刷新按钮
+            if (name === 'routes' && !routesTabLoaded) {
+                routesTabLoaded = true;
+                loadRoutes();
+                loadSystemRoutes();
+            }
+            if (name === 'proxy') loadStats();
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // 当前生效的出口 IP（由 /api/status 或 /api/interfaces 返回）
+        let currentOutboundIP = '';
+        let proxyUptimeBase = null;
+        let proxyRunning = false;
+
+        function renderUptime() {
+            // 停止状态没有"已运行多久"可言，只有进程自身的运行时长
+            if (!proxyUptimeBase) return;
+            let elapsed = Math.floor((Date.now() - proxyUptimeBase.since) / 1000);
+            document.getElementById('proxy-uptime').textContent =
+                proxyRunning ? formatInterval(proxyUptimeBase.proxy + elapsed) : '-';
+            document.getElementById('process-uptime').textContent =
+                '程序已运行 ' + formatInterval(proxyUptimeBase.process + elapsed);
+        }
+
+        const TOGGLE_START_CLASSES = ['bg-emerald-600', 'text-white', 'hover:bg-emerald-700'];
+        const TOGGLE_STOP_CLASSES = ['bg-red-50', 'text-red-600', 'hover:bg-red-100'];
+
+        function renderProxyState(data) {
+            proxyRunning = !!data.running;
+
+            let state = document.getElementById('proxy-state');
+            state.textContent = proxyRunning ? '运行中' : '已停止';
+            state.className = 'font-semibold ' + (proxyRunning ? 'text-green-600' : 'text-gray-500');
+
+            let btn = document.getElementById('proxy-toggle-btn');
+            btn.disabled = false;
+            btn.textContent = proxyRunning ? '停止代理' : '启动代理';
+            btn.className = 'px-3 py-1.5 rounded-lg text-xs font-medium transition ' +
+                (proxyRunning ? TOGGLE_STOP_CLASSES : TOGGLE_START_CLASSES).join(' ');
+
+            // 代理停着时保存配置不会把它拉起来，按钮文案要说清楚
+            document.getElementById('proxy-save-btn').textContent =
+                proxyRunning ? '保存并重启代理' : '保存配置';
+
+            document.getElementById('proxy-started-at').textContent =
+                proxyRunning ? formatTime(data.started_at) : '-';
+        }
+
+        function applyStatus(data) {
+            document.getElementById('new-socks-port').value = data.socks_port;
+            currentOutboundIP = data.outbound_ip || '';
+
+            // 记下服务端的启动时刻，之后本地自增，不用为了走秒反复请求
+            proxyUptimeBase = {
+                proxy: data.uptime_seconds || 0,
+                process: data.process_uptime_secs || 0,
+                since: Date.now(),
+            };
+            renderProxyState(data);
+            renderUptime();
+        }
+
+        async function loadStatus() {
+            try {
+                let res = await fetch('/api/status');
+                applyStatus(await res.json());
+            } catch (err) {
+                console.error('Failed to load status:', err);
+            }
+            syncEgressCommand();
+            await loadInterfaces();
+        }
+
+        async function toggleProxy() {
+            let btn = document.getElementById('proxy-toggle-btn');
+            let action = proxyRunning ? 'stop' : 'start';
+            btn.disabled = true;
+            btn.textContent = proxyRunning ? '停止中…' : '启动中…';
+
+            try {
+                let res = await fetch('/api/proxy', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action}),
+                });
+                if (!res.ok) {
+                    let errText = await res.text();
+                    alert((action === 'start' ? '启动失败: ' : '停止失败: ') + errText);
+                    await loadStatus();
+                    return;
+                }
+                applyStatus(await res.json());
+                // 代理状态变了，之前的出口探测结果作废
+                let result = document.getElementById('egress-result');
+                result.className = 'text-sm font-mono text-gray-400';
+                result.textContent = proxyRunning ? '代理已启动，可重新检测' : '代理已停止';
+                document.getElementById('egress-detail').textContent = '';
+            } catch (err) {
+                alert('请求出错: ' + err);
+                await loadStatus();
+            }
+        }
+
+        function makeOption(value, text) {
+            let opt = document.createElement('option');
+            opt.value = value;
+            opt.textContent = text;
+            return opt;
+        }
+
+        function ifaceLabel(i) {
+            let parts = [i.name];
+            let mask = (i.cidr || '').split('/')[1];
+            if (mask) parts.push('/' + mask);
+            if (i.gateway) parts.push('网关 ' + i.gateway);
+            if (i.loopback) parts.push('回环');
+            return `${i.ip}  (${parts.join(' · ')})`;
+        }
+
+        async function loadInterfaces() {
+            let sel = document.getElementById('outbound-ip-select');
+            let wasManual = sel.value === '__manual__';
+            let desired = wasManual ? '__manual__' : (sel.value || currentOutboundIP || '');
+
+            let list = [];
+            try {
+                let res = await fetch('/api/interfaces');
+                let data = await res.json();
+                list = data.interfaces || [];
+                if (typeof data.outbound_ip === 'string') currentOutboundIP = data.outbound_ip;
+            } catch (err) {
+                console.error('Failed to load interfaces:', err);
+            }
+
+            sel.innerHTML = '';
+            sel.appendChild(makeOption('', '留空（默认自动选择）'));
+            list.forEach(i => sel.appendChild(makeOption(i.ip, ifaceLabel(i))));
+
+            // 当前配置的 IP 已不在本机网卡列表中时，仍然保留该项，避免静默丢配置
+            if (currentOutboundIP && !list.some(i => i.ip === currentOutboundIP)) {
+                sel.appendChild(makeOption(currentOutboundIP, `${currentOutboundIP}  (当前配置，未检测到对应网卡)`));
+            }
+            sel.appendChild(makeOption('__manual__', '手动输入…'));
+
+            sel.value = desired;
+            if (sel.selectedIndex === -1) sel.value = '';
+            onOutboundSelectChange();
+
+            // 路由管理页的网关输入框复用探测到的网关做候选
+            let datalist = document.getElementById('gateway-options');
+            datalist.innerHTML = '';
+            [...new Set(list.map(i => i.gateway).filter(Boolean))].forEach(gw => {
+                datalist.appendChild(makeOption(gw, gw));
+            });
+        }
+
+        function onOutboundSelectChange() {
+            let sel = document.getElementById('outbound-ip-select');
+            let manual = document.getElementById('new-outbound-ip');
+            if (sel.value === '__manual__') {
+                manual.classList.remove('hidden');
+                manual.focus();
+            } else {
+                manual.classList.add('hidden');
+            }
+        }
+
+        function getOutboundIP() {
+            let sel = document.getElementById('outbound-ip-select');
+            if (sel.value === '__manual__') {
+                return document.getElementById('new-outbound-ip').value.trim();
+            }
+            return sel.value;
+        }
+
+        function syncEgressCommand() {
+            let port = document.getElementById('new-socks-port').value.trim() || '1080';
+            document.getElementById('egress-command').textContent =
+                `curl --socks5-hostname 127.0.0.1:${port} 'https://myip.ipip.net/'`;
+        }
+
+        function copyEgressCommand() {
+            let text = document.getElementById('egress-command').textContent;
+            if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+        }
+
+        async function checkEgressIP() {
+            let btn = document.getElementById('egress-check-btn');
+            let result = document.getElementById('egress-result');
+            let detail = document.getElementById('egress-detail');
+
+            if (!proxyRunning) {
+                result.className = 'text-sm font-mono text-amber-600';
+                result.textContent = '代理未启动';
+                detail.textContent = '检测需要经由本机 SOCKS5 端口发请求，请先点「启动代理」。';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '检测中…';
+            result.className = 'text-sm font-mono text-gray-400';
+            result.textContent = '正在经由本机 SOCKS5 请求…';
+            detail.textContent = '';
+
+            try {
+                let res = await fetch('/api/egress-ip');
+                let data = await res.json();
+
+                if (data.ok) {
+                    result.className = 'text-sm font-mono font-semibold text-emerald-600';
+                    result.textContent = data.egress_ip || '(未能从响应中解析出 IP)';
+                    let bound = data.bound_outbound_ip ? `绑定出口 ${data.bound_outbound_ip}` : '未绑定出口 IP（系统默认选路）';
+                    detail.textContent = `${bound} · ${formatTime(data.checked_at)}\n${data.raw || ''}`;
+                } else {
+                    result.className = 'text-sm font-mono text-red-600';
+                    result.textContent = '检测失败';
+                    detail.textContent = data.error || '未知错误';
+                }
+            } catch (err) {
+                result.className = 'text-sm font-mono text-red-600';
+                result.textContent = '检测失败';
+                detail.textContent = String(err);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '检测';
+            }
+        }
+
+        async function loadStats() {
+            try {
+                let res = await fetch('/api/stats');
+                let data = await res.json();
+
+                document.getElementById('stat-bytes-in').innerText = formatBytes(data.total_bytes_in);
+                document.getElementById('stat-bytes-out').innerText = formatBytes(data.total_bytes_out);
+                document.getElementById('stat-active-conns').innerText = data.active_connections_count;
+                document.getElementById('stat-total-conns').innerText = data.total_connections;
+
+                let tbody = document.getElementById('conns-table-body');
+                tbody.innerHTML = '';
+
+                if (!data.active_connections || data.active_connections.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-gray-400">暂无活跃连接</td></tr>`;
+                    return;
+                }
+
+                data.active_connections.forEach(c => {
+                    let tr = document.createElement('tr');
+                    tr.className = 'hover:bg-gray-50';
+                    tr.innerHTML = `
+                        <td class="px-4 py-2 text-gray-800">${escapeHtml(c.client_addr)}</td>
+                        <td class="px-4 py-2 text-gray-600">${escapeHtml(c.target_addr)}</td>
+                        <td class="px-4 py-2 text-right text-indigo-600">${formatBytes(c.bytes_in)}</td>
+                        <td class="px-4 py-2 text-right text-emerald-600">${formatBytes(c.bytes_out)}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error('Failed to load stats:', err);
+            }
+        }
+
+        const STATUS_BADGE = {
+            active:  ['生效中',   'bg-emerald-50 text-emerald-700'],
+            missing: ['已失效',   'bg-amber-50 text-amber-700'],
+            paused:  ['已暂停',   'bg-gray-200 text-gray-600'],
+            unknown: ['状态未知', 'bg-gray-100 text-gray-500'],
+        };
+
+        async function loadRoutes() {
+            try {
+                let res = await fetch('/api/routes');
+                let data = await res.json();
+                let routes = data.routes || [];
+                let tbody = document.getElementById('routes-table-body');
+                let hint = document.getElementById('routes-state-hint');
+                let restoreBtn = document.getElementById('restore-all-btn');
+                tbody.innerHTML = '';
+
+                // 台账与内核路由表的对账结果
+                let missingCount = routes.filter(r => r.status === 'missing').length;
+                let parts = [];
+                parts.push(data.state_file ? `台账: ${data.state_file}` : '台账: 未启用（本次改动不会被记录）');
+                let refreshSec = data.domain_refresh_seconds || 0;
+                parts.push(refreshSec > 0
+                    ? `域名每 ${formatInterval(refreshSec)} 自动重新解析`
+                    : '域名自动重新解析: 已关闭');
+                document.getElementById('domain-refresh-hint').textContent = refreshSec > 0
+                    ? `之后每 ${formatInterval(refreshSec)} 自动重新解析一次`
+                    : '自动重新解析已关闭，IP 变化后需手动点「重新解析」';
+                if (data.reconcile_error) {
+                    parts.push(`无法对账: ${data.reconcile_error}`);
+                } else if (missingCount > 0) {
+                    parts.push(`${missingCount} 条记录当前不在内核路由表中`);
+                }
+                if (data.orphans && data.orphans.length) {
+                    parts.push(`另有 ${data.orphans.length} 条内核路由带本程序标记但不在台账中: ` +
+                        data.orphans.map(o => o.Destination + ' -> ' + o.Gateway).join(', '));
+                }
+                hint.textContent = parts.join(' · ');
+                restoreBtn.classList.toggle('hidden', missingCount === 0);
+
+                let domainEntries = data.domains || [];
+                if (routes.length === 0 && domainEntries.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="3" class="px-4 py-6 text-center text-gray-400">暂无自定义路由规则</td></tr>`;
+                    return;
+                }
+
+                // 手动添加的排前面；域名解析出来的按域名分组。
+                // 一条路由可能同时属于多个域名（不同域名解析到同一个 IP），
+                // 所以按"域名 -> 它持有的路由"来渲染，而不是给每条路由认一个主人。
+                routes.filter(r => !(r.domains || []).length).forEach(r => tbody.appendChild(routeRow(r, false)));
+
+                domainEntries.forEach(e => {
+                    let owned = routes.filter(r => (r.domains || []).includes(e.domain));
+                    tbody.appendChild(domainHeaderRow(e, owned));
+                    owned.forEach(r => tbody.appendChild(routeRow(r, true, e.domain)));
+                });
+
+                // 有路由但域名记录丢了的（老台账遗留），兜底显示，避免看不见
+                let tracked = new Set(domainEntries.map(e => e.domain));
+                let orphanDomains = new Set();
+                routes.forEach(r => (r.domains || []).forEach(d => { if (!tracked.has(d)) orphanDomains.add(d); }));
+                orphanDomains.forEach(d => {
+                    let owned = routes.filter(r => (r.domains || []).includes(d));
+                    tbody.appendChild(domainHeaderRow({domain: d}, owned));
+                    owned.forEach(r => tbody.appendChild(routeRow(r, true, d)));
+                });
+            } catch (err) {
+                console.error('Failed to load routes:', err);
+            }
+        }
+
+        function domainHeaderRow(entry, owned) {
+            let paused = entry.paused || (owned.length > 0 && owned.every(r => r.paused));
+            let tr = document.createElement('tr');
+            tr.className = paused ? 'bg-gray-100' : (owned.length ? 'bg-indigo-50/60' : 'bg-amber-50/50');
+
+            let lastResolved = entry.last_resolved || (owned[0] && owned[0].resolved_at);
+            let summary = owned.length
+                ? `· ${owned.length} 个 IP · 解析于 ${formatTime(lastResolved)}`
+                : `· 托管中但当前无生效路由 · 上次解析 ${formatTime(lastResolved)}`;
+
+            tr.innerHTML = `
+                <td colspan="2" class="px-4 py-2 text-xs ${paused ? 'text-gray-600' : (owned.length ? 'text-indigo-800' : 'text-amber-800')}">
+                    域名 <span class="font-mono font-semibold">${escapeHtml(entry.domain)}</span>
+                    ${paused ? '<span class="ml-1 px-1.5 py-0.5 rounded bg-gray-200 text-gray-600">已暂停</span>' : ''}
+                    <span>${summary}</span>
+                    ${entry.last_error ? `<div class="text-red-600 mt-0.5">${escapeHtml(entry.last_error)}</div>` : ''}
+                </td>
+                <td class="px-4 py-2 text-right whitespace-nowrap align-top">
+                    <button data-act="pause" class="text-xs text-amber-700 hover:text-amber-900 font-medium mr-2">${paused ? '恢复' : '暂停'}</button>
+                    <button data-act="refresh" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium mr-2">重新解析</button>
+                    <button data-act="delete" class="text-xs text-red-600 hover:text-red-800 font-medium">${owned.length ? '删除全部' : '取消托管'}</button>
+                </td>
+            `;
+            tr.querySelector('[data-act="pause"]').onclick = () => setDomainPaused(entry.domain, !paused);
+            tr.querySelector('[data-act="refresh"]').onclick = () => refreshDomain(entry.domain);
+            tr.querySelector('[data-act="delete"]').onclick = () => deleteDomain(entry.domain, owned.length);
+            return tr;
+        }
+
+        function routeRow(r, nested, underDomain) {
+            let [badgeText, badgeClass] = STATUS_BADGE[r.status] || STATUS_BADGE.unknown;
+            let others = (r.domains || []).filter(d => d !== underDomain);
+            let origin = (r.domains || []).length
+                ? (others.length ? `与 ${others.map(escapeHtml).join('、')} 共用同一条路由` : '来自 ' + escapeHtml(underDomain || r.domains[0]))
+                : '手动指定';
+
+            let tr = document.createElement('tr');
+            tr.className = r.paused ? 'bg-gray-50/60' : 'hover:bg-gray-50';
+            tr.innerHTML = `
+                <td class="px-4 py-3 font-mono ${r.paused ? 'text-gray-400' : 'text-gray-800'}">
+                    ${nested ? '<span class="text-gray-300 mr-1">└</span>' : ''}${escapeHtml(r.destination)}
+                    <span class="ml-1 px-1.5 py-0.5 rounded text-xs font-sans ${badgeClass}">${badgeText}</span>
+                    <div class="text-xs font-sans text-gray-400 mt-0.5">${origin} · 添加于 ${formatTime(r.created_at)}</div>
+                </td>
+                <td class="px-4 py-3 font-mono ${r.paused ? 'text-gray-400' : 'text-gray-600'}">${escapeHtml(r.gateway)}</td>
+                <td class="px-4 py-3 text-right align-top whitespace-nowrap">
+                    <button data-act="pause" class="bg-amber-50 text-amber-700 px-2.5 py-1 rounded hover:bg-amber-100 transition text-xs font-medium mr-1">${r.paused ? '恢复' : '暂停'}</button>
+                    <button data-act="delete" class="bg-red-50 text-red-600 px-2.5 py-1 rounded hover:bg-red-100 transition text-xs font-medium">删除</button>
+                </td>
+            `;
+            tr.querySelector('[data-act="pause"]').onclick = () => setRoutePaused(r.destination, !r.paused);
+            tr.querySelector('[data-act="delete"]').onclick = () => deleteRoute(r.destination);
+            return tr;
+        }
+
+        async function setRoutePaused(destination, paused) {
+            await postPause({destination: destination, paused: paused});
+        }
+
+        async function setDomainPaused(domain, paused) {
+            await postPause({domain: domain, paused: paused});
+        }
+
+        async function pauseAll(paused) {
+            if (!confirm(paused
+                ? '确定要暂停全部托管路由吗？它们会从系统路由表撤下，台账记录保留，域名也会停止定时重新解析。'
+                : '确定要恢复全部托管路由吗？')) return;
+            await postPause({all: true, paused: paused});
+        }
+
+        async function postPause(body) {
+            try {
+                let res = await fetch('/api/routes/pause', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
+                if (!res.ok) {
+                    alert('操作失败: ' + await res.text());
+                    return;
+                }
+                let r = await res.json();
+                loadRoutes();
+                loadSystemRoutes();
+                if (r.failed && r.failed.length) {
+                    alert(`${r.paused ? '暂停' : '恢复'}时有 ${r.failed.length} 条失败:\n` +
+                        r.failed.map(f => '  ' + f.destination + ': ' + f.error).join('\n'));
+                }
+            } catch (err) {
+                alert('请求出错: ' + err);
+            }
+        }
+
+        async function loadSystemRoutes() {
+            try {
+                let res = await fetch('/api/system-routes');
+                let data = await res.json();
+                let tbody = document.getElementById('sys-routes-table-body');
+                tbody.innerHTML = '';
+
+                if (!data.routes || data.routes.length === 0) {
+                    tbody.innerHTML = `<tr><td class="px-4 py-6 text-center text-gray-400">无法获取系统路由表</td></tr>`;
+                    return;
+                }
+
+                data.routes.forEach(line => {
+                    let tr = document.createElement('tr');
+                    tr.className = 'hover:bg-gray-50';
+                    tr.innerHTML = `<td class="px-4 py-2 text-gray-700 whitespace-pre">${escapeHtml(line)}</td>`;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error('Failed to load system routes:', err);
+            }
+        }
+
+        // 把秒数写成中文时长：90 -> "1 分 30 秒"，3600 -> "1 小时"
+        function formatInterval(seconds) {
+            seconds = Math.max(0, Math.floor(seconds));
+            let h = Math.floor(seconds / 3600);
+            let m = Math.floor((seconds % 3600) / 60);
+            let s = seconds % 60;
+            // 整点的说法更自然：300 -> "5 分钟"，3600 -> "1 小时"
+            if (h && !m && !s) return h + ' 小时';
+            if (!h && m && !s) return m + ' 分钟';
+
+            let parts = [];
+            if (h) parts.push(h + ' 小时');
+            if (m) parts.push(m + ' 分');
+            if (s || !parts.length) parts.push(s + ' 秒');
+            return parts.join(' ');
+        }
+
+        function formatTime(value) {
+            if (!value) return '-';
+            let d = new Date(value);
+            if (isNaN(d.getTime()) || d.getFullYear() < 1971) return '-'; // Go 的零值时间
+            return d.toLocaleString('zh-CN', { hour12: false });
+        }
+
+        function escapeHtml(text) {
+            return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        }
+
+        async function addRoute(event) {
+            event.preventDefault();
+            let dest = document.getElementById('dest').value.trim();
+            let gateway = document.getElementById('gateway').value.trim();
+
+            try {
+                let res = await fetch('/api/routes', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({destination: dest, gateway: gateway})
+                });
+                if (res.ok) {
+                    let result = await res.json();
+                    document.getElementById('dest').value = '';
+                    document.getElementById('gateway').value = '';
+                    loadRoutes();
+                    loadSystemRoutes();
+
+                    // 按域名添加时如实告知解析到了哪些 IP、有没有部分失败
+                    if (result.domain) {
+                        let lines = [`域名 ${result.domain} 解析到 ${result.added.length} 个 IPv4，已添加路由:`];
+                        result.added.forEach(r => lines.push('  ' + r.destination + ' -> ' + r.gateway));
+                        if (result.failed && result.failed.length) {
+                            lines.push('', `以下 ${result.failed.length} 条添加失败:`);
+                            result.failed.forEach(f => lines.push('  ' + f.destination + ': ' + f.error));
+                        }
+                        alert(lines.join('\n'));
+                    } else if (result.failed && result.failed.length) {
+                        alert('部分添加失败: ' + result.failed.map(f => f.destination + ' (' + f.error + ')').join(', '));
+                    }
+                } else {
+                    let errText = await res.text();
+                    alert('添加路由失败: ' + errText);
+                }
+            } catch (err) {
+                alert('请求出错: ' + err);
+            }
+        }
+
+        async function deleteRoute(destination) {
+            if (!confirm(`确定要删除网段 ${destination} 的路由规则吗？`)) return;
+
+            try {
+                let res = await fetch('/api/routes', {
+                    method: 'DELETE',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({destination: destination})
+                });
+                if (res.ok) {
+                    loadRoutes();
+                    loadSystemRoutes();
+                } else {
+                    let errText = await res.text();
+                    alert('删除路由失败: ' + errText);
+                }
+            } catch (err) {
+                alert('请求出错: ' + err);
+            }
+        }
+
+        async function deleteDomain(domain, count) {
+            let msg = count > 0
+                ? `确定要取消托管域名 ${domain}，并删除它解析出的全部 ${count} 条路由吗？`
+                : `确定要取消托管域名 ${domain} 吗？（当前没有生效的路由）`;
+            if (!confirm(msg)) return;
+
+            try {
+                let res = await fetch('/api/routes', {
+                    method: 'DELETE',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({domain: domain})
+                });
+                if (res.ok) {
+                    loadRoutes();
+                    loadSystemRoutes();
+                } else {
+                    let errText = await res.text();
+                    alert('删除失败: ' + errText);
+                }
+            } catch (err) {
+                alert('请求出错: ' + err);
+            }
+        }
+
+        async function refreshDomain(domain) {
+            try {
+                let res = await fetch('/api/routes/refresh', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({domain: domain})
+                });
+                if (!res.ok) {
+                    alert('重新解析失败: ' + await res.text());
+                    return;
+                }
+                let r = await res.json();
+                loadRoutes();
+                loadSystemRoutes();
+
+                // 逐条报告变化，别让路由悄悄变了都不知道
+                let lines = [`域名 ${r.domain} 当前解析到 ${r.current.length} 个 IP:`, '  ' + r.current.join('\n  ')];
+                if (r.added && r.added.length) lines.push('', `新增 ${r.added.length} 条: ` + r.added.join(', '));
+                if (r.removed && r.removed.length) lines.push(`撤下 ${r.removed.length} 条: ` + r.removed.join(', '));
+                if (!r.added?.length && !r.removed?.length) lines.push('', '解析结果无变化。');
+                if (r.failed && r.failed.length) {
+                    lines.push('', `${r.failed.length} 条操作失败:`);
+                    r.failed.forEach(f => lines.push('  ' + f.destination + ': ' + f.error));
+                }
+                alert(lines.join('\n'));
+            } catch (err) {
+                alert('请求出错: ' + err);
+            }
+        }
+
+        async function restoreRoutes() {
+            if (!confirm('把台账中已失效的路由重新下发到系统路由表？')) return;
+
+            try {
+                let res = await fetch('/api/routes/restore', {method: 'POST'});
+                let r = await res.json();
+                loadRoutes();
+                loadSystemRoutes();
+
+                let lines = [`成功重新下发 ${(r.restored || []).length} 条`];
+                (r.restored || []).forEach(d => lines.push('  ' + d));
+                if (r.failed && r.failed.length) {
+                    lines.push('', `失败 ${r.failed.length} 条:`);
+                    r.failed.forEach(f => lines.push('  ' + f.destination + ': ' + f.error));
+                }
+                alert(lines.join('\n'));
+            } catch (err) {
+                alert('请求出错: ' + err);
+            }
+        }
+
+        async function updateProxyConfig() {
+            let port = document.getElementById('new-socks-port').value.trim();
+            let outboundIp = getOutboundIP();
+            if (!port) return;
+
+            try {
+                let res = await fetch('/api/status', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({socks_port: port, outbound_ip: outboundIp})
+                });
+                if (res.ok) {
+                    alert(proxyRunning
+                        ? '代理配置修改成功！程序已自动重启代理服务。'
+                        : '配置已保存，代理仍处于停止状态，点「启动代理」后生效。');
+                    // 清空选择，让 loadStatus() 按服务端返回的实际出口 IP 重新定位
+                    document.getElementById('outbound-ip-select').value = '';
+                    document.getElementById('new-outbound-ip').value = '';
+                    // 出口已变，之前的探测结果作废
+                    document.getElementById('egress-result').className = 'text-sm font-mono text-gray-400';
+                    document.getElementById('egress-result').textContent = '配置已变更，请重新检测';
+                    document.getElementById('egress-detail').textContent = '';
+                    loadStatus();
+                } else {
+                    let errText = await res.text();
+                    alert('修改失败: ' + errText);
+                }
+            } catch (err) {
+                alert('请求出错: ' + err);
+            }
+        }
+
+        // Initial load
+        let savedTab = null;
+        try { savedTab = localStorage.getItem('lan-proxy-active-tab'); } catch (err) { /* 隐私模式下忽略 */ }
+        switchTab(TABS.includes(savedTab) ? savedTab : 'proxy');
+        loadStatus();
+
+        // 仅在代理标签页可见时刷新连接数据
+        setInterval(() => {
+            if (activeTab === 'proxy') loadStats();
+        }, 2000);
+
+        // 运行时长本地走秒，不额外发请求
+        setInterval(() => {
+            if (activeTab === 'proxy') renderUptime();
+        }, 1000);
+    </script>
+</body>
+</html>
