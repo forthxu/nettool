@@ -153,6 +153,15 @@ func currentSSID() (ssid string, source string, err error) {
 		return "", "", fmt.Errorf("未检测到已连接的 Wi-Fi")
 
 	case "windows":
+		// Get-NetConnectionProfile 的 Name 对无线网卡就是 SSID，而且属性名不随
+		// 系统语言变化；netsh 的输出是本地化的，只能当回落
+		if out, e := runPowerShell(psCurrentSSID); e == nil {
+			if s := strings.TrimSpace(out); s != "" {
+				return s, "Get-NetConnectionProfile", nil
+			}
+			return "", "", fmt.Errorf("未检测到已连接的 Wi-Fi")
+		}
+
 		out, e := exec.Command("netsh", "wlan", "show", "interfaces").CombinedOutput()
 		if e != nil {
 			return "", "", fmt.Errorf("读取 SSID 失败: %s", strings.TrimSpace(string(out)))

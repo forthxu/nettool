@@ -4,6 +4,7 @@ package route
 // 命令拼装单独拆成纯函数，因为真正执行需要 root，只有这样才能被测试覆盖。
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -48,7 +49,36 @@ func execOSRoute(action, dest, gateway, iface string) error {
 		}
 	}
 
-	return fmt.Errorf("%s (output: %s)", err, string(output))
+	return classifyRouteErr(action, dest, gateway, fmt.Errorf("%s (output: %s)", err, strings.TrimSpace(string(output))))
+}
+
+// 良性错误的两种情形。命令行工具的文案跟着系统语言走（中文 Windows 说的是
+// "对象已存在"），所以除了认文案，还要能靠"再查一遍内核路由表"来判定。
+var (
+	errRouteExists  = errors.New("路由已存在于内核中")
+	errRouteMissing = errors.New("路由不在内核中")
+)
+
+// classifyRouteErr 判断命令失败是不是"本来就有 / 本来就没有"这种良性错误。
+// 文案认得出来就直接用；认不出来（换了系统语言）就查一次内核路由表，
+// 按实际状态给错误包一个哨兵，让上层的 isRouteExistsError 仍然能认出来。
+func classifyRouteErr(action, dest, gateway string, err error) error {
+	if isRouteExistsError(err) || isRouteMissingError(err) {
+		return err
+	}
+
+	table, tableErr := KernelTable()
+	if tableErr != nil {
+		return err // 读不到路由表就没法判断，原样往上抛
+	}
+
+	switch has := KernelHasRoute(table, dest, gateway); {
+	case action == "add" && has:
+		return fmt.Errorf("%w: %v", errRouteExists, err)
+	case action != "add" && !has:
+		return fmt.Errorf("%w: %v", errRouteMissing, err)
+	}
+	return err
 }
 
 // buildRouteCmd 组装各平台的路由命令
@@ -109,16 +139,24 @@ func buildRouteCmd(osName, action, dest, gateway, iface string) (*exec.Cmd, erro
 }
 
 // isRouteMissingError 判断"内核里本来就没有这条路由"这类错误。
-// macOS: not in table；Linux: RTNETLINK answers: No such process。
+// macOS: not in table；Linux: RTNETLINK answers: No such process；
+// Windows 的文案是本地化的，靠 classifyRouteErr 包上的哨兵认。
 func isRouteMissingError(err error) bool {
+	if errors.Is(err, errRouteMissing) {
+		return true
+	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "not in table") || strings.Contains(msg, "no such process") ||
 		strings.Contains(msg, "element not found")
 }
 
 // isRouteExistsError 判断"这条路由内核里已经有了"这类错误。
-// macOS/Linux 都是 File exists，Windows 是 The object already exists。
+// macOS/Linux 都是 File exists，英文 Windows 是 The object already exists；
+// 其他语言的 Windows 同样靠 classifyRouteErr 包上的哨兵认。
 func isRouteExistsError(err error) bool {
+	if errors.Is(err, errRouteExists) {
+		return true
+	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "file exists") || strings.Contains(msg, "already exists")
 }

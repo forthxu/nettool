@@ -65,7 +65,7 @@ func parseFlags() options {
 		apiPort:         flag.String("api-port", "8090", "API management and Web UI port"),
 		authUser:        flag.String("user", "", "Web UI & API username (leave empty for no auth)"),
 		authPass:        flag.String("pass", "", "Web UI & API password (leave empty for no auth)"),
-		stateFile:       flag.String("state-file", "", "路由台账文件路径（留空自动选择 /var/lib/nettool/routes.json 等可写位置）"),
+		stateFile:       flag.String("state-file", "", "路由台账文件路径（留空自动选择：Linux/macOS 用 /var/lib/nettool/routes.json，Windows 用 %ProgramData%\\nettool\\routes.json，都不可写则退到用户目录）"),
 		restoreRoutes:   flag.Bool("restore-routes", false, "启动时自动重新下发台账中已失效的路由"),
 		domainRefresh:   flag.Duration("domain-refresh", 5*time.Minute, "域名路由自动重新解析间隔（0 表示关闭）"),
 		startProxy:      flag.Bool("start-proxy", false, "启动时无条件开启 SOCKS5 代理（不加则按上次退出时的开关状态恢复）"),

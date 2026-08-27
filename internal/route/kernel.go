@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"nettool/internal/netutil"
 )
 
 // KernelRoute 是从系统路由表里解析出来的一条记录。
@@ -33,6 +35,12 @@ func KernelTable() ([]KernelRoute, error) {
 			return nil, fmt.Errorf("%v (%s)", err, strings.TrimSpace(string(out)))
 		}
 		return parseDarwinRoutes(string(out)), nil
+	case "windows":
+		out, err := exec.Command("route", "print", "-4").CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("%v (%s)", err, strings.TrimSpace(string(out)))
+		}
+		return parseWindowsRoutes(string(out)), nil
 	default:
 		return nil, fmt.Errorf("%s 暂不支持路由对账", runtime.GOOS)
 	}
@@ -100,6 +108,24 @@ func parseDarwinRoutes(out string) []KernelRoute {
 			continue // link#16 / MAC 之类的直连表项
 		}
 		result = append(result, KernelRoute{Destination: dest, Gateway: fields[1]})
+	}
+	return result
+}
+
+// parseWindowsRoutes 解析 route print -4 的活动路由表。
+//
+// Windows 没有 Linux 的 proto 标记那样的地方给我们打记号，所以 Ours 恒为 false，
+// 孤儿路由检测在这个平台上用不了；台账对账（这条还在不在内核里）不受影响。
+func parseWindowsRoutes(out string) []KernelRoute {
+	var result []KernelRoute
+	for _, r := range netutil.ParseWindowsRoutePrint(out) {
+		if r.Gateway == "" {
+			continue // 直连（On-link），不是本程序下发的形态
+		}
+		if r.Destination == "0.0.0.0/0" {
+			continue // 默认路由，与其他平台保持一致地跳过
+		}
+		result = append(result, KernelRoute{Destination: r.Destination, Gateway: r.Gateway})
 	}
 	return result
 }

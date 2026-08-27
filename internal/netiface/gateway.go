@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"nettool/internal/netutil"
 )
 
 // resolveGateways 就地填好每条记录的 Gateway 字段
@@ -34,8 +36,20 @@ func gatewaysByIP(list []Info) map[string]string {
 		return darwinServiceGateways()
 	case "linux":
 		return linuxSourceGateways(list)
+	case "windows":
+		return windowsGateways()
 	}
 	return map[string]string{}
+}
+
+// windowsGateways 读活动路由表里各出口地址的默认网关。
+// Windows 的路由表本来就是按接口地址（而不是接口名）记的，正好是这里要的形状。
+func windowsGateways() map[string]string {
+	out, err := exec.Command("route", "print", "-4").CombinedOutput()
+	if err != nil {
+		return map[string]string{}
+	}
+	return netutil.WindowsDefaultGatewaysByIP(string(out))
 }
 
 // darwinServiceGateways 读每个网络服务的 IPv4 配置 (scutil)，得到 地址 -> Router 的映射。

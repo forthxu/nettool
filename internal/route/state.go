@@ -45,19 +45,37 @@ func pickStateFile(flagVal string) string {
 		return flagVal
 	}
 
-	candidates := []string{filepath.Join("/var/lib/nettool", "routes.json")}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		candidates = append(candidates, filepath.Join(home, ".nettool", "routes.json"))
-	}
-	candidates = append(candidates, "nettool-routes.json")
-
-	for _, c := range candidates {
+	for _, c := range stateCandidates() {
 		if err := netutil.EnsureStateDir(c); err == nil {
 			return c
 		}
 	}
 	log.Printf("[State] 所有候选台账路径均不可写，本次运行不持久化路由")
 	return ""
+}
+
+// stateCandidates 按优先级给出台账的候选位置：先系统级的共享目录，
+// 再当前用户的目录，最后退到工作目录。
+func stateCandidates() []string {
+	var candidates []string
+
+	if runtime.GOOS == "windows" {
+		// Windows 上 /var/lib 会被当成当前盘根目录下的 \var\lib，
+		// 以管理员身份跑时还真能建出来，台账就落到了一个谁都想不到的地方
+		if programData := os.Getenv("ProgramData"); programData != "" {
+			candidates = append(candidates, filepath.Join(programData, "nettool", "routes.json"))
+		}
+		if dir, err := os.UserConfigDir(); err == nil && dir != "" {
+			candidates = append(candidates, filepath.Join(dir, "nettool", "routes.json"))
+		}
+	} else {
+		candidates = append(candidates, filepath.Join("/var/lib/nettool", "routes.json"))
+	}
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".nettool", "routes.json"))
+	}
+	return append(candidates, "nettool-routes.json")
 }
 
 // persistLocked 调用方必须已持有 rm.mu
@@ -226,6 +244,11 @@ func (rm *Manager) RestoreRoutes(destinations []string) (restored []string, fail
 			continue // 已经在内核里，不重复下发
 		}
 		if err := execOSRoute("add", r.Destination, r.Gateway, r.Interface); err != nil {
+			// 内核里本来就有这条：读不到路由表的平台（或对账之后被别处补上的）
+			// 会走到这儿，这是期望结果而不是失败
+			if isRouteExistsError(err) {
+				continue
+			}
 			log.Printf("[State] 重新下发失败 %s -> %s: %v", r.Destination, r.Gateway, err)
 			failed = append(failed, OpError{Destination: r.Destination, Error: err.Error()})
 			continue

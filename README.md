@@ -23,7 +23,8 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 - **Web 后台登录认证**：`-user` / `-pass` 开启 HTTP Basic Auth，保护控制台与全部 API；两个都留空则不鉴权。
 - **按上次的状态启动**：SOCKS5 代理和 DNS 服务的开关状态跟着配置一起存盘，进程重启（升级、崩溃、机器重启）后照着上次退出前的样子恢复——上次开着就自动起来，上次点过「停止」就保持停止，不用每次再去后台点一次。全新安装（还没有配置文件）时两者都不启动，避免装好就抢端口；`-start-proxy` / `-start-dns` 则是无条件启动，不看上次状态。
 - **配置各自独立成 JSON**：路由台账、Wi-Fi 配置档、DNS 配置、代理配置四份文件互不干扰，一律先写临时文件再原子替换，掉电不会留下半个文件。
-- **系统服务模板**：`deploy/` 下有 Linux systemd 与 OpenWrt procd 两份配置，开机自启 + 崩溃自动重启。
+- **系统服务模板**：`deploy/` 下有 Linux systemd、OpenWrt procd 与 Windows 计划任务三份配置，开机自启 + 崩溃自动重启。
+- **不认本地化文案**：Windows 的 `netsh` / `route` 输出跟着系统语言走（中文版打印的是「接口 xxx 的配置」「在链路上」），所以那边的读取一律走 PowerShell 的 `Get-Net*`（属性名与枚举值固定）或只认数据行的形状，中文系统上一样能用。
 
 ---
 
@@ -48,7 +49,7 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 
 - 允许指定代理外发流量绑定的本地网卡 IP，强制经由指定路由器网关转发。
 - Web 后台自动读取本机可用网卡（网卡名、IP/掩码、对应网关）供下拉选择，并提供「刷新」按钮随时重新探测；亦可切换为「手动输入」填写任意 IP。
-- 网关按 **IP 逐个解析**而非按网卡：同一块网卡上的多个地址可能分属不同上游路由器（macOS 的多个网络服务 / Linux 的策略路由）。macOS 读取 `scutil` 中各网络服务的 `Router`，Linux 用 `ip route get <目标> from <本机IP>` 查询实际生效网关，取不到时回落到该网卡的默认路由。
+- 网关按 **IP 逐个解析**而非按网卡：同一块网卡上的多个地址可能分属不同上游路由器（macOS 的多个网络服务 / Linux 的策略路由）。macOS 读取 `scutil` 中各网络服务的 `Router`，Linux 用 `ip route get <目标> from <本机IP>` 查询实际生效网关，Windows 从 `route print -4` 的活动路由表里按出口地址挑默认路由（同一地址有多条时取跃点数最小的）；取不到时回落到该网卡的默认路由。
 - ⚠️ 注意：显示的网关是系统对该地址配置的上游路由器。在 macOS 上，同一网卡的多个 IP 只有优先级最高的那条默认路由生效，**仅绑定源 IP 并不会自动改走另一个网关**；确需分流时请配合「路由管理」按目标网段指定网关。
 - 对应接口：`GET /api/interfaces`，返回 `{"interfaces": [{name, ip, cidr, mac, gateway, loopback}], "outbound_ip": "当前生效出口IP"}`。
 - 出口 IP 强制校验：必须是本机网卡上真实存在的 IPv4 地址，否则启动时直接报错退出、`POST /api/status` 返回 `400` 并列出可用的本机 IP；校验失败不会影响正在运行的代理服务。
@@ -87,11 +88,13 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 解决「哪些是本程序改的」这个问题：
 
 - 每次增删都写入 JSON 台账，记录 `destination / gateway / domain / resolved_at / created_at`；先写临时文件再原子替换。
-- 路径由 `-state-file` 指定，留空则依次尝试 `/var/lib/nettool/routes.json` → `~/.nettool/routes.json` → 当前目录，全部不可写则本次运行不持久化（并明确告警）。
+- 路径由 `-state-file` 指定，留空则依次尝试系统级目录（Linux/macOS 是 `/var/lib/nettool/routes.json`，Windows 是 `%ProgramData%\nettool\routes.json`）→ 用户目录 `~/.nettool/routes.json` → 当前目录，全部不可写则本次运行不持久化（并明确告警）。
 - 启动时读台账并与内核路由表逐条比对，日志与界面标出每条是「生效中 / 已失效 / 状态未知」；机器重启导致路由丢失时，可在界面点「重新下发失效路由」（`POST /api/routes/restore`，同时会纠正作用域并在响应里返回 `rescoped`），或用 `-restore-routes` 启动参数自动重建。
 - **作用域自动纠偏（macOS）**：`-ifscope` 的作用域网卡是添加那一刻按「网关挂在哪块网卡上」算出来存进台账的。网关后来换了网卡（典型：把 Wi-Fi 的默认网关也设成同一个路由器，系统就把它的邻居项挪到了 Wi-Fi 上），旧作用域里再也解析不到网关，这条路由会变成**黑洞**——内核里看着还在（状态显示「生效中」），走它的流量却发不出去。所以在启动对账、每轮域名刷新、以及 Wi-Fi 配置档切换完 5 秒后，都会比一遍作用域，不一致就按新网卡撤旧下新；网关当前哪块网卡都够不着时不动它（可能只是网线拔了），下一轮再说。下发失败不写台账，下轮自动重试。界面每条路由会显示当前作用域网卡。
 - Linux 上下发时额外打 `proto 210` 标记，即使台账丢失也能用 `ip route show proto 210` 认出本程序加的路由；界面会把「内核有标记但台账没有」的列为孤儿路由。busybox 的 `ip` 不认 `proto` 时会自动去掉标记重试。
 - 目标写法统一归一化为 CIDR，各平台命令按主机/网段分别拼装（macOS `-host` vs `-net`、Windows 按前缀算掩码），由 `internal/route` 的单元测试覆盖。
+- **对账三平台都支持**：Linux 读 `ip route show`、macOS 读 `netstat -nrf inet`、Windows 读 `route print -4`。Windows 那份解析不认表头（它是本地化的），只认「四列点分 IPv4 加一列数字」的数据行，中文/德文系统上都一样能对账；代价是 Windows 没有 `proto` 那样的地方给我们打标记，孤儿路由检测仅 Linux 可用。
+- **「路由已存在 / 本来就没有」的判定不依赖错误文案**：`route`/`ip` 的报错同样是本地化的，认不出来时会回头查一遍内核路由表，按实际状态判定，避免把「这条本来就在」误报成下发失败。
 
 ---
 
@@ -102,6 +105,7 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 - 「网卡配置」页列出本机每张网卡的配置入口、当前方式（DHCP / 手动）、IP、掩码、网关、手工 DNS，并可直接改成 DHCP 或手动指定。
 - 各平台的写入方式：macOS `networksetup`（以「网络服务」为单位，一块网卡可能对应多个服务）、Linux `nmcli`（以 NetworkManager 连接为单位，改完自动 `connection up`）、OpenWrt `uci`（以 interface 段为单位，`uci commit` + `/etc/init.d/network reload`）、Windows `netsh`。掩码可填 `255.255.255.0` 或 `24`，会按平台自动换算（nmcli 用 `ip/prefix`）。
 - **Linux 上有两套后端**：装了 `nmcli` 就用 NetworkManager，没有则回落到 UCI（OpenWrt 上没有 NetworkManager，这条路本来是断的）。读和写用同一个判断，不会出现「从 UCI 读、往 nmcli 写」。UCI 那一组改动整段交给 `sh` 一次执行，中途失败不会留下半套配置；段名会做严格校验，挡住往脚本里注入。
+- **Windows 上优先用 PowerShell**：`Get-NetAdapter` / `Get-NetIPInterface` / `Get-NetConnectionProfile` 输出 JSON，属性名与枚举值都不随系统语言变化；`netsh` 那套解析保留为老系统（Get-Net* 要 Windows 8 / Server 2012 起才有）的回落。无线网卡的 SSID 取自 `Get-NetConnectionProfile` 的 `Name`。
 - 下发前校验：IP / 网关 / DNS 必须是合法 IPv4，网关必须与 IP 同网段（否则配下去必然不通），掩码必须连续。命令拼装由 `internal/netconfig` 的单元测试覆盖四套后端。
 - ⚠️ 修改网卡配置需要 root，且会让该网卡短暂断线；如果 Web 后台正是经由这张网卡访问的，页面会断开。界面上有二次确认。
 - 接口：`GET /api/net/interfaces`、`POST /api/net/apply {service, device, method, ip, mask, gateway, dns[]}`。
@@ -161,7 +165,9 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 
 ### 权限说明
 
-ICMP 套接字有两条路：非特权的 ICMP 数据报套接字与需要 root 的原始套接字。ping 优先用前者（macOS 默认可用，Linux 需要当前用户的 gid 在 `net.ipv4.ping_group_range` 内），traceroute 优先用后者——**Linux 上非特权套接字收不到中间路由器的回包**，那样整趟都会是超时，这种情况界面会明确提示。两条都打不开时接口返回 `403` 并说明原因。
+ICMP 套接字有两条路：非特权的 ICMP 数据报套接字与需要 root 的原始套接字。ping 优先用前者（macOS 默认可用，Linux 需要当前用户的 gid 在 `net.ipv4.ping_group_range` 内），traceroute 优先用后者——**Linux 上非特权套接字收不到中间路由器的回包**，那样整趟都会是超时，这种情况界面会明确提示。两条都打不开时接口返回 `403`，并按当前平台说明该怎么办。
+
+**Windows 没有非特权 ICMP 套接字**，只剩原始套接字一条路，因此 ping 与 traceroute 都必须以管理员身份运行（防火墙还要放行 ICMP 入站）。设置 TTL 在 Windows 上是支持的，traceroute 能正常工作；只有回包自身的 TTL 读不到（`x/net` 在这个平台上没实现控制消息），界面上那一列会显示 0。
 
 ### 共用接口
 
@@ -199,7 +205,8 @@ nettool/
 │   │   └── config.go     # 配置持久化
 │   ├── netconfig/    # 网卡配置与 Wi-Fi 自动切换
 │   │   ├── nic.go        # 配置模型、校验、下发命令拼装
-│   │   ├── nicread.go    # 读取三平台的当前网卡配置
+│   │   ├── nicread.go    # 读取当前网卡配置（macOS networksetup / Linux nmcli / Windows netsh 回落）
+│   │   ├── nicwin.go     # Windows 首选后端：PowerShell Get-Net*（不受系统语言影响）
 │   │   ├── nicuci.go     # OpenWrt 后端：ubus 读、uci 写
 │   │   ├── wifi.go       # 当前 SSID / 网络指纹识别
 │   │   ├── profile.go    # Wi-Fi 配置档存取
@@ -210,7 +217,7 @@ nettool/
 │   │   ├── ping.go       # ping 的探测循环与统计
 │   │   └── traceroute.go # 逐跳 TTL 探测与反查
 │   ├── netiface/     # 本机网卡枚举与网关探测
-│   ├── netutil/      # 跨包共用的小工具（域名校验、状态文件原子写入）
+│   ├── netutil/      # 跨包共用的小工具（域名校验、状态文件原子写入、Windows 路由表解析）
 │   └── api/          # HTTP 管理接口 + 前端托管
 │       ├── server.go     # 路由注册与 Basic Auth
 │       ├── route.go      # /api/routes*
@@ -220,8 +227,9 @@ nettool/
 │       └── diag.go       # /api/diag/*
 ├── Makefile          # 多平台一键编译脚本
 ├── deploy/
-│   ├── nettool.service  # Linux Systemd 服务模板
-│   └── nettool.init     # OpenWrt Procd 初始化脚本模板
+│   ├── nettool.service      # Linux Systemd 服务模板
+│   ├── nettool.init         # OpenWrt Procd 初始化脚本模板
+│   └── nettool-windows.ps1  # Windows 计划任务（开机自启）安装脚本
 ├── static/
 │   └── index.html    # 嵌入式响应式 Web 管理前端（六个页签）
 └── README.md         # 项目说明文档
@@ -330,6 +338,24 @@ sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_passw
 
 > 网卡配置页在 OpenWrt 上走 UCI 后端：配置对象是 `/etc/config/network` 里的 interface 段名（`lan` / `wan` / `wwan`），下发相当于 `uci set` + `uci commit network` + `/etc/init.d/network reload`。`proto` 是 `pppoe` 等本程序改不了的类型时只读不写。
 
+### Windows
+
+1. 把 `build\nettool-windows-amd64.exe` 复制到 `C:\nettool\nettool.exe`。
+2. 以**管理员身份**打开 PowerShell，运行安装脚本：
+   ```powershell
+   .\deploy\nettool-windows.ps1 -BinaryPath C:\nettool\nettool.exe -Password 你的密码
+   ```
+3. 查看与控制：
+   ```powershell
+   Get-ScheduledTask nettool | Get-ScheduledTaskInfo
+   Stop-ScheduledTask nettool
+   .\deploy\nettool-windows.ps1 -Uninstall
+   ```
+
+> 用的是计划任务而不是 Windows 服务：nettool 是普通控制台程序，不响应服务控制消息，`sc.exe create` 注册后会以 1053 失败，除非再套一层 NSSM。计划任务不需要额外依赖，同样能做到开机自启（SYSTEM 身份）+ 崩溃自动重启。
+>
+> ⚠️ Windows 上路由下发、网卡配置、ping / traceroute 都需要管理员权限，所以脚本固定用 SYSTEM 账户运行；手工启动时请用管理员身份的终端。
+
 ---
 
 ## 测试
@@ -369,7 +395,7 @@ curl -s -X POST http://127.0.0.1:8090/api/diag/ping \
   -d '{"target":"1.1.1.1","source_ip":"192.168.1.10","count":4}'
 curl -s 'http://127.0.0.1:8090/api/diag/job?kind=ping'
 
-# traceroute（Linux 需要 root）
+# traceroute（Linux 需要 root，Windows 需要管理员）
 curl -s -X POST http://127.0.0.1:8090/api/diag/traceroute \
   -H 'Content-Type: application/json' \
   -d '{"target":"8.8.8.8","max_hops":30,"probes":3,"resolve_names":true}'
@@ -378,7 +404,7 @@ curl -s 'http://127.0.0.1:8090/api/diag/job?kind=traceroute'
 
 ### 单元测试
 
-含 DNS 转发/缓存/分流的端到端用例、各平台命令拼装（networksetup / nmcli / uci / netsh）、ICMP 回包匹配等：
+含 DNS 转发/缓存/分流的端到端用例、各平台命令拼装（networksetup / nmcli / uci / netsh / ip / route）、本地化输出的路由表解析、ICMP 回包匹配等：
 
 ```bash
 go test -race ./...

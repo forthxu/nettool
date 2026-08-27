@@ -500,6 +500,74 @@ apcli0    ESSID: "MyHomeNet"
 	}
 }
 
+// PowerShell 是 Windows 上的首选数据源：属性名与枚举值不随系统语言变化，
+// 中文系统上一样能读出来。
+func TestParsePowerShellNICs(t *testing.T) {
+	out := `[{"Device":"以太网","Media":"802.3","IP":"192.168.1.20","Prefix":24,"Dhcp":"Disabled",` +
+		`"Gateway":"192.168.1.1","DNS":["8.8.8.8","1.1.1.1"],"SSID":""},` +
+		`{"Device":"WLAN","Media":"Native802.11","IP":"192.168.10.124","Prefix":24,"Dhcp":"Enabled",` +
+		`"Gateway":"192.168.10.1","DNS":"223.5.5.5","SSID":"MyNet"},` +
+		`{"Device":"vEthernet","Media":"Unspecified","IP":"","Prefix":0,"Dhcp":"","Gateway":"","DNS":null,"SSID":""}]`
+
+	list, err := parsePowerShellNICs(out)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("应解析出 3 块网卡, 得到 %d: %+v", len(list), list)
+	}
+
+	eth := list[0]
+	if eth.Type != "ethernet" || eth.Method != "manual" || eth.Mask != "255.255.255.0" ||
+		eth.Gateway != "192.168.1.1" || !eth.Active {
+		t.Errorf("静态以太网解析有误: %+v", eth)
+	}
+	if eth.Service != "以太网" {
+		t.Errorf("Service 应等于接口别名（netsh 写配置时按它找）: %q", eth.Service)
+	}
+	if len(eth.DNS) != 2 || eth.DNS[1] != "1.1.1.1" {
+		t.Errorf("DNS 解析有误: %v", eth.DNS)
+	}
+
+	wlan := list[1]
+	if wlan.Type != "wifi" || wlan.Method != "dhcp" || wlan.SSID != "MyNet" {
+		t.Errorf("无线网卡解析有误: %+v", wlan)
+	}
+	// PowerShell 会把单元素数组塌缩成标量，得能接住
+	if len(wlan.DNS) != 1 || wlan.DNS[0] != "223.5.5.5" {
+		t.Errorf("单个 DNS 被塌缩成标量时解析有误: %v", wlan.DNS)
+	}
+
+	idle := list[2]
+	if idle.Type != "other" || idle.Method != "unknown" || idle.Active || len(idle.DNS) != 0 {
+		t.Errorf("没有地址的虚拟网卡解析有误: %+v", idle)
+	}
+}
+
+// 只有一块网卡时 ConvertTo-Json 给的是对象而不是数组
+func TestParsePowerShellNICsSingleObject(t *testing.T) {
+	out := "\ufeff" + `{"Device":"WLAN","Media":"Native802.11","IP":"10.0.0.5","Prefix":8,` +
+		`"Dhcp":"Enabled","Gateway":"10.0.0.1","DNS":[],"SSID":"Cafe"}`
+
+	list, err := parsePowerShellNICs(out)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if len(list) != 1 || list[0].Device != "WLAN" || list[0].Mask != "255.0.0.0" {
+		t.Fatalf("单对象输出解析有误: %+v", list)
+	}
+}
+
+func TestParsePowerShellNICsEmpty(t *testing.T) {
+	list, err := parsePowerShellNICs("  \r\n")
+	if err != nil || len(list) != 0 {
+		t.Errorf("空输出应得到空列表而不是报错: %v, %v", list, err)
+	}
+	if _, err := parsePowerShellNICs("not json"); err == nil {
+		t.Error("非 JSON 输出应报错，好让上层回落到 netsh")
+	}
+}
+
 func TestSameSettings(t *testing.T) {
 	cur := NIC{Method: "manual", IP: "192.168.1.20", Mask: "255.255.255.0", Gateway: "192.168.1.1", DNS: []string{"8.8.8.8"}}
 	want := Settings{Method: "manual", IP: "192.168.1.20", Mask: "255.255.255.0", Gateway: "192.168.1.1", DNS: []string{"8.8.8.8"}}

@@ -4,6 +4,7 @@ package netconfig
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
 	"runtime"
@@ -411,7 +412,26 @@ func parseNetshInterfaceConfig(out string) []NIC {
 	return list
 }
 
+// windowsNICs 优先走 PowerShell（输出结构化且不随系统语言变化），
+// 拿不到时才回落到 netsh —— 后者只认得英文输出，在中文系统上会一条都读不出来。
 func windowsNICs() ([]NIC, error) {
+	psOut, psErr := runPowerShell(psListNICs)
+	if psErr == nil {
+		list, err := parsePowerShellNICs(psOut)
+		if err == nil && len(list) > 0 {
+			return list, nil
+		}
+		if err != nil {
+			log.Printf("[NetConfig] PowerShell 网卡信息解析失败，改用 netsh: %v", err)
+		}
+	} else {
+		log.Printf("[NetConfig] PowerShell 不可用，改用 netsh（非英文系统上可能读不出网卡）: %v", psErr)
+	}
+	return windowsNetshNICs()
+}
+
+// windowsNetshNICs 是老系统上的回落路径（Get-Net* 系列要 Windows 8 / Server 2012 起才有）
+func windowsNetshNICs() ([]NIC, error) {
 	out, err := exec.Command("netsh", "interface", "ip", "show", "config").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("读取网卡配置失败: %s", strings.TrimSpace(string(out)))

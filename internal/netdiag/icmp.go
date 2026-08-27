@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -55,6 +56,11 @@ type icmpConn struct {
 // 在 net.ipv4.ping_group_range 内）和需要 root 的原始套接字。ping 优先用前者，
 // 好让非 root 也能用；traceroute 优先用后者——非特权套接字在 Linux 上收不到中间
 // 路由器回的 Time Exceeded，那样整趟都是超时。
+//
+// Windows 压根没有非特权 ICMP 套接字，只剩原始套接字这一条路，因此 ping 和
+// traceroute 都必须以管理员身份运行。好在设置 TTL（traceroute 要用）在 Windows
+// 上是支持的，只有回包的 TTL 读不到（x/net 在这个平台上没实现控制消息），
+// 界面上那一列会显示 0。
 func openICMP(source net.IP, preferRaw bool) (*icmpConn, error) {
 	addr := "0.0.0.0"
 	if source != nil {
@@ -64,6 +70,10 @@ func openICMP(source net.IP, preferRaw bool) (*icmpConn, error) {
 	networks := []string{"udp4", "ip4:icmp"}
 	if preferRaw {
 		networks = []string{"ip4:icmp", "udp4"}
+	}
+	if runtime.GOOS == "windows" {
+		// Windows 没有非特权 ICMP 数据报套接字，试也是白试
+		networks = []string{"ip4:icmp"}
 	}
 
 	var errs []error
@@ -86,8 +96,19 @@ func openICMP(source net.IP, preferRaw bool) (*icmpConn, error) {
 		return c, nil
 	}
 
-	return nil, fmt.Errorf("%w（原始套接字需要 root，非特权套接字在 Linux 上需要放开 net.ipv4.ping_group_range）: %v",
-		ErrICMPUnavailable, errors.Join(errs...))
+	return nil, fmt.Errorf("%w（%s）: %v", ErrICMPUnavailable, icmpPrivilegeHint(), errors.Join(errs...))
+}
+
+// icmpPrivilegeHint 按平台给一句"该怎么办"，界面上直接显示给用户
+func icmpPrivilegeHint() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "Windows 没有非特权 ICMP 套接字，必须以管理员身份运行；另外防火墙要放行 ICMP 入站"
+	case "linux":
+		return "原始套接字需要 root，非特权套接字需要当前用户的 gid 落在 net.ipv4.ping_group_range 内"
+	default:
+		return "原始套接字需要 root"
+	}
 }
 
 func (c *icmpConn) close() {
