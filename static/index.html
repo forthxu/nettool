@@ -12,11 +12,12 @@
         <header class="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
                 <h1 class="text-3xl font-bold text-indigo-600">网络管理工具</h1>
-                <p class="text-sm text-gray-500 mt-1">多路由器网关调度、SOCKS5 代理控制与实时流量监控</p>
+                <p class="text-sm text-gray-500 mt-1">SOCKS5 代理 · 多路由器网关调度 · 本地 DNS · 网卡配置 · 连通性诊断</p>
             </div>
             <div id="status-badge" class="flex items-center gap-2 bg-green-100 text-green-800 px-4 py-2 rounded-full text-sm font-medium">
                 <span class="w-3 h-3 bg-green-500 rounded-full animate-pulse"></span>
                 <span>系统运行中</span>
+                <span id="process-uptime" class="text-green-700/70 font-normal"></span>
             </div>
         </header>
 
@@ -24,6 +25,10 @@
         <nav class="flex gap-6 border-b mb-8">
             <button id="tab-btn-proxy" onclick="switchTab('proxy')" class="pb-3 -mb-px text-sm font-medium transition">SOCKS5 代理</button>
             <button id="tab-btn-routes" onclick="switchTab('routes')" class="pb-3 -mb-px text-sm font-medium transition">路由管理</button>
+            <button id="tab-btn-nic" onclick="switchTab('nic')" class="pb-3 -mb-px text-sm font-medium transition">网卡配置</button>
+            <button id="tab-btn-dns" onclick="switchTab('dns')" class="pb-3 -mb-px text-sm font-medium transition">DNS 服务</button>
+            <button id="tab-btn-ping" onclick="switchTab('ping')" class="pb-3 -mb-px text-sm font-medium transition">Ping</button>
+            <button id="tab-btn-trace" onclick="switchTab('trace')" class="pb-3 -mb-px text-sm font-medium transition">路由追踪</button>
         </nav>
 
         <!-- ============ Tab 1: SOCKS5 代理 ============ -->
@@ -64,11 +69,10 @@
                             <span class="text-gray-500">代理启动于:</span>
                             <span id="proxy-started-at" class="text-gray-700 font-mono text-xs">-</span>
                         </div>
-                        <div class="flex justify-between text-sm -mt-2">
+                        <div class="flex justify-between text-sm -mt-2 pb-1">
                             <span class="text-gray-500">已运行:</span>
                             <span id="proxy-uptime" class="text-gray-700 text-xs">-</span>
                         </div>
-                        <div id="process-uptime" class="text-xs text-gray-400 -mt-2"></div>
                         <div>
                             <label class="block text-xs text-gray-500 mb-1">监听端口</label>
                             <input type="number" id="new-socks-port" value="1080" oninput="syncEgressCommand()" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -84,6 +88,11 @@
                             </select>
                             <input type="text" id="new-outbound-ip" placeholder="例: 192.168.1.20" class="hidden w-full mt-2 px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
                             <p class="mt-2 text-xs text-gray-400 leading-relaxed">绑定源 IP 后是否真的走该网关，取决于系统路由：同一网卡上的多个 IP 通常仍走同一条默认路由，需要策略路由或在「路由管理」里按目标网段指定网关。</p>
+                        </div>
+                        <div>
+                            <label for="new-dns" class="block text-xs text-gray-500 mb-1">代理 DNS（留空用系统 DNS）</label>
+                            <input type="text" id="new-dns" placeholder="例: 8.8.8.8" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
+                            <p class="mt-2 text-xs text-gray-400 leading-relaxed">客户端用 <span class="font-mono">--socks5-hostname</span> 时域名是交给代理解析的。系统 DNS 若在被污染的网络里会返回假地址，这时哪怕出口在国外也连不上；填一个境外 DNS，查询会从上面绑定的出口 IP 发出去。</p>
                         </div>
                         <button id="proxy-save-btn" onclick="updateProxyConfig()" class="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm hover:bg-indigo-700 transition font-medium">保存配置</button>
 
@@ -209,14 +218,606 @@
                 </div>
             </div>
         </section>
+
+        <!-- ============ Tab 3: 网卡配置 ============ -->
+        <section id="tab-nic" class="hidden">
+            <!-- 当前 Wi-Fi 与自动切换状态 -->
+            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="text-lg font-semibold text-gray-700">当前 Wi-Fi 与自动切换</h2>
+                    <button onclick="loadWiFi()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">刷新</button>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                    <div>
+                        <div class="text-xs text-gray-400">当前连接的 Wi-Fi</div>
+                        <div id="wifi-current" class="mt-1 font-semibold text-gray-700">读取中…</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-gray-400">自动切换</div>
+                        <div id="wifi-watch" class="mt-1 text-gray-700">-</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-gray-400">最近一次切换</div>
+                        <div id="wifi-last-switch" class="mt-1 text-gray-700 text-xs leading-relaxed">-</div>
+                    </div>
+                </div>
+                <p id="wifi-ssid-error" class="hidden mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 leading-relaxed"></p>
+            </div>
+
+            <!-- 网卡列表 -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mb-6">
+                <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50/50">
+                    <h2 class="text-base font-semibold text-gray-700">本机网卡</h2>
+                    <button onclick="loadNICs()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">刷新</button>
+                </div>
+                <div id="nic-error" class="hidden px-6 py-3 text-xs text-red-600 bg-red-50 border-b"></div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+                                <th class="px-4 py-3 font-medium">网卡 / 服务</th>
+                                <th class="px-4 py-3 font-medium">方式</th>
+                                <th class="px-4 py-3 font-medium">IP / 掩码</th>
+                                <th class="px-4 py-3 font-medium">网关</th>
+                                <th class="px-4 py-3 font-medium">DNS</th>
+                                <th class="px-4 py-3 font-medium text-right">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="nic-table-body" class="divide-y divide-gray-200 text-sm">
+                            <tr><td colspan="6" class="px-4 py-4 text-center text-gray-400">正在加载...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p class="px-6 py-3 text-xs text-gray-400 border-t leading-relaxed">
+                    修改网卡配置需要 root 权限，且会让该网卡短暂断线——如果这个管理页正是通过这张网卡访问的，页面会断开，请改用其他网卡或本机访问。
+                </p>
+            </div>
+
+            <!-- 网卡配置表单 -->
+            <div id="nic-form-card" class="hidden bg-white p-6 rounded-xl shadow-sm border border-indigo-200 mb-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-semibold text-gray-700">配置 <span id="nic-form-title" class="font-mono text-indigo-600"></span></h2>
+                    <button onclick="closeNICForm()" class="text-xs text-gray-500 hover:text-gray-700">取消</button>
+                </div>
+                <form onsubmit="submitNICForm(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">配置方式</label>
+                        <select id="nic-method" onchange="onNICMethodChange()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value="dhcp">自动 (DHCP)</option>
+                            <option value="manual">手动指定</option>
+                        </select>
+                    </div>
+                    <div class="nic-manual-field">
+                        <label class="block text-xs text-gray-500 mb-1">IP 地址</label>
+                        <input type="text" id="nic-ip" placeholder="192.168.1.20" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div class="nic-manual-field">
+                        <label class="block text-xs text-gray-500 mb-1">子网掩码</label>
+                        <input type="text" id="nic-mask" placeholder="255.255.255.0 或 24" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div class="nic-manual-field">
+                        <label class="block text-xs text-gray-500 mb-1">默认网关（可留空）</label>
+                        <input type="text" id="nic-gateway" placeholder="192.168.1.1" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">DNS（逗号分隔，留空跟随 DHCP）</label>
+                        <input type="text" id="nic-dns" placeholder="8.8.8.8, 1.1.1.1" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div class="flex items-end gap-2">
+                        <button type="submit" class="flex-1 bg-indigo-600 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">立即应用</button>
+                        <button type="button" onclick="saveAsWiFiProfile()" id="nic-save-profile-btn" class="hidden flex-1 bg-emerald-600 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-emerald-700 transition">存为当前 Wi-Fi 配置档</button>
+                    </div>
+                </form>
+                <div id="nic-form-msg" class="mt-3 text-xs"></div>
+            </div>
+
+            <!-- Wi-Fi 配置档 -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <div class="px-6 py-4 border-b bg-gray-50/50">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-base font-semibold text-gray-700">Wi-Fi 配置档（按 SSID 自动切换）</h2>
+                        <button onclick="loadWiFi()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">刷新</button>
+                    </div>
+                    <div id="wifi-profile-hint" class="text-xs text-gray-400 mt-1"></div>
+                </div>
+                <div class="px-6 py-4 border-b bg-white">
+                    <form onsubmit="submitWiFiProfile(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Wi-Fi 名称 (SSID)</label>
+                            <input type="text" id="wp-ssid" required placeholder="例: DemoNet_5G" class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <label class="mt-1 flex items-center gap-1 text-xs text-gray-400">
+                                <input type="checkbox" id="wp-bind-current" class="rounded"> 绑定当前这个 Wi-Fi（读不到 SSID 时靠系统指纹匹配）
+                            </label>
+                            <label class="mt-1 flex items-center gap-1 text-xs text-gray-400">
+                                <input type="checkbox" id="wp-default" onchange="onWPDefaultChange()" class="rounded"> 作为默认档：连到没有单独配置的 Wi-Fi 时套用
+                            </label>
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">应用到网卡</label>
+                            <select id="wp-service" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">配置方式</label>
+                            <select id="wp-method" onchange="onWPMethodChange()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option value="dhcp">自动 (DHCP)</option>
+                                <option value="manual">手动指定</option>
+                            </select>
+                        </div>
+                        <div class="flex items-end">
+                            <button type="submit" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-emerald-700 transition">保存配置档</button>
+                        </div>
+                        <div class="wp-manual-field hidden">
+                            <label class="block text-xs text-gray-500 mb-1">IP 地址</label>
+                            <input type="text" id="wp-ip" placeholder="192.168.1.20" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div class="wp-manual-field hidden">
+                            <label class="block text-xs text-gray-500 mb-1">子网掩码</label>
+                            <input type="text" id="wp-mask" placeholder="255.255.255.0 或 24" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div class="wp-manual-field hidden">
+                            <label class="block text-xs text-gray-500 mb-1">默认网关（可留空）</label>
+                            <input type="text" id="wp-gateway" placeholder="192.168.1.1" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">DNS（逗号分隔，留空跟随 DHCP）</label>
+                            <input type="text" id="wp-dns" placeholder="8.8.8.8, 1.1.1.1" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                    </form>
+                    <div id="wp-form-msg" class="mt-3 text-xs"></div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+                                <th class="px-4 py-3 font-medium">Wi-Fi</th>
+                                <th class="px-4 py-3 font-medium">应用到</th>
+                                <th class="px-4 py-3 font-medium">配置</th>
+                                <th class="px-4 py-3 font-medium">状态</th>
+                                <th class="px-4 py-3 font-medium text-right">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="wifi-profiles-body" class="divide-y divide-gray-200 text-sm">
+                            <tr><td colspan="5" class="px-4 py-4 text-center text-gray-400">正在加载...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ Tab 4: DNS 服务 ============ -->
+        <section id="tab-dns" class="hidden">
+            <!-- 概览 -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">累计查询</div>
+                    <div id="dns-stat-queries" class="text-2xl font-bold text-indigo-600 mt-2">0</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">缓存命中</div>
+                    <div id="dns-stat-cache" class="text-2xl font-bold text-emerald-600 mt-2">0</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">解析失败</div>
+                    <div id="dns-stat-failures" class="text-2xl font-bold text-red-500 mt-2">0</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">缓存条目</div>
+                    <div id="dns-stat-entries" class="text-2xl font-bold text-gray-700 mt-2">0</div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                <!-- 服务配置 -->
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 lg:col-span-1">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-lg font-semibold text-gray-700">DNS 服务</h2>
+                        <button type="button" id="dns-toggle-btn" onclick="toggleDNS()" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-400">…</button>
+                    </div>
+                    <div class="space-y-4">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-500">运行状态:</span>
+                            <span id="dns-state" class="font-semibold text-gray-400">读取中…</span>
+                        </div>
+                        <div class="flex justify-between text-sm -mt-2">
+                            <span class="text-gray-500">已运行:</span>
+                            <span id="dns-uptime" class="text-gray-700 text-xs">-</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">监听地址</label>
+                                <input type="text" id="dns-listen" placeholder="0.0.0.0" class="w-full px-3 py-1.5 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">监听端口</label>
+                                <input type="number" id="dns-port" placeholder="53" class="w-full px-3 py-1.5 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">查询策略</label>
+                                <select id="dns-strategy" class="w-full px-3 py-1.5 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <option value="sequential">顺序（失败才换下一个）</option>
+                                    <option value="race">并发（谁先回用谁）</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">超时 (毫秒)</label>
+                                <input type="number" id="dns-timeout" placeholder="5000" class="w-full px-3 py-1.5 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="flex items-center gap-2 text-sm text-gray-600">
+                                <input type="checkbox" id="dns-cache" class="rounded"> 启用缓存
+                            </label>
+                            <div class="grid grid-cols-3 gap-2 mt-2">
+                                <div>
+                                    <label class="block text-xs text-gray-500 mb-1">条数上限</label>
+                                    <input type="number" id="dns-cache-size" class="w-full px-2 py-1.5 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-500 mb-1">最小 TTL</label>
+                                    <input type="number" id="dns-min-ttl" class="w-full px-2 py-1.5 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-500 mb-1">最大 TTL</label>
+                                    <input type="number" id="dns-max-ttl" class="w-full px-2 py-1.5 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                </div>
+                            </div>
+                        </div>
+                        <button id="dns-save-btn" onclick="saveDNSConfig()" class="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm hover:bg-indigo-700 transition font-medium">保存配置</button>
+                        <div id="dns-config-msg" class="text-xs"></div>
+                        <p class="text-xs text-gray-400 leading-relaxed border-t pt-3">
+                            监听 53 端口需要 root，且不能和系统自带的解析器（systemd-resolved、dnsmasq 等）抢；被占用时可以先改成 5353 试。
+                            局域网里的机器把 DNS 指向本机 IP 后，就能用下面配的上游和分流规则解析。
+                        </p>
+                        <p id="dns-config-file" class="text-xs text-gray-400 font-mono break-all"></p>
+                    </div>
+                </div>
+
+                <!-- 上游 DNS -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden lg:col-span-2">
+                    <div class="px-6 py-4 border-b bg-gray-50/50">
+                        <div class="flex justify-between items-center">
+                            <h2 class="text-base font-semibold text-gray-700">上游 DNS</h2>
+                            <button onclick="loadDNS()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">刷新</button>
+                        </div>
+                        <p class="text-xs text-gray-400 mt-1">支持普通 UDP/TCP、DoT (DNS over TLS)、DoH (DNS over HTTPS)。填了域名规则的上游只接管这些域名及其子域，没填的作为兜底。</p>
+                    </div>
+                    <div class="px-6 py-4 border-b">
+                        <form onsubmit="submitUpstream(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">类型</label>
+                                <select id="up-type" onchange="onUpstreamTypeChange()" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <option value="udp">UDP (53)</option>
+                                    <option value="tcp">TCP (53)</option>
+                                    <option value="tls">DoT (TLS, 853)</option>
+                                    <option value="https">DoH (HTTPS)</option>
+                                </select>
+                            </div>
+                            <div class="lg:col-span-2">
+                                <label class="block text-xs text-gray-500 mb-1">地址</label>
+                                <input type="text" id="up-address" required placeholder="223.5.5.5" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <p id="up-address-hint" class="text-xs text-gray-400 mt-1">IP 或 IP:端口，不写端口默认 53</p>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">名称（可选）</label>
+                                <input type="text" id="up-name" placeholder="阿里 DNS" class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div class="up-secure-field hidden">
+                                <label class="block text-xs text-gray-500 mb-1">证书域名</label>
+                                <input type="text" id="up-hostname" placeholder="dns.google" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div class="up-secure-field hidden">
+                                <label class="block text-xs text-gray-500 mb-1">Bootstrap DNS</label>
+                                <input type="text" id="up-bootstrap" placeholder="223.5.5.5" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div class="lg:col-span-2">
+                                <label class="block text-xs text-gray-500 mb-1">只解析这些域名（逗号分隔，留空=兜底）</label>
+                                <input type="text" id="up-domains" placeholder="cn, qq.com, weibo.com" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div class="flex items-end gap-2 lg:col-span-4">
+                                <button type="submit" id="up-submit-btn" class="bg-emerald-600 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-emerald-700 transition">添加上游</button>
+                                <button type="button" id="up-cancel-btn" onclick="resetUpstreamForm()" class="hidden text-xs text-gray-500 hover:text-gray-700 py-2 px-2">取消编辑</button>
+                                <span class="text-xs text-gray-400">也可以直接粘 <span class="font-mono">tls://1.1.1.1@one.one.one.one</span> 或 <span class="font-mono">https://dns.google/dns-query</span>，类型会自动识别</span>
+                            </div>
+                        </form>
+                        <div id="up-form-msg" class="mt-2 text-xs"></div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+                                    <th class="px-4 py-3 font-medium">上游</th>
+                                    <th class="px-4 py-3 font-medium">类型</th>
+                                    <th class="px-4 py-3 font-medium">域名规则</th>
+                                    <th class="px-4 py-3 font-medium">用量</th>
+                                    <th class="px-4 py-3 font-medium text-right">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dns-upstreams-body" class="divide-y divide-gray-200 text-sm">
+                                <tr><td colspan="5" class="px-4 py-4 text-center text-gray-400">正在加载...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                <!-- 静态解析记录 -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b bg-gray-50/50">
+                        <h2 class="text-base font-semibold text-gray-700">静态解析记录</h2>
+                        <p class="text-xs text-gray-400 mt-1">本地写死的域名→IP，优先于所有上游。支持 <span class="font-mono">*.dev.local</span> 这样的通配。</p>
+                    </div>
+                    <div class="px-6 py-4 border-b">
+                        <form onsubmit="submitHostRecord(event)" class="flex flex-wrap gap-3 items-end">
+                            <div class="flex-1 min-w-[10rem]">
+                                <label class="block text-xs text-gray-500 mb-1">域名</label>
+                                <input type="text" id="host-domain" required placeholder="nas.local" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div class="flex-1 min-w-[10rem]">
+                                <label class="block text-xs text-gray-500 mb-1">IP</label>
+                                <input type="text" id="host-ip" required placeholder="192.168.1.10" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <button type="submit" class="bg-emerald-600 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-emerald-700 transition">添加</button>
+                        </form>
+                        <div id="host-form-msg" class="mt-2 text-xs"></div>
+                    </div>
+                    <div class="overflow-x-auto max-h-72 overflow-y-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+                                    <th class="px-4 py-3 font-medium">域名</th>
+                                    <th class="px-4 py-3 font-medium">IP</th>
+                                    <th class="px-4 py-3 font-medium text-right">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dns-hosts-body" class="divide-y divide-gray-200 text-sm font-mono">
+                                <tr><td colspan="3" class="px-4 py-4 text-center text-gray-400">暂无记录</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 测试查询 -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b bg-gray-50/50">
+                        <h2 class="text-base font-semibold text-gray-700">测试解析</h2>
+                        <p class="text-xs text-gray-400 mt-1">走真实的分流规则和上游，但不写缓存；DNS 服务没启动时也能测，用来验证上游填对没有。</p>
+                    </div>
+                    <div class="px-6 py-4">
+                        <form onsubmit="runDNSTest(event)" class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                            <div class="sm:col-span-2">
+                                <label class="block text-xs text-gray-500 mb-1">域名</label>
+                                <input type="text" id="dns-test-name" required placeholder="www.example.com" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">类型</label>
+                                <select id="dns-test-type" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <option>A</option><option>AAAA</option><option>CNAME</option><option>MX</option>
+                                    <option>NS</option><option>TXT</option><option>SOA</option><option>SRV</option><option>PTR</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">指定上游</label>
+                                <select id="dns-test-upstream" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"></select>
+                            </div>
+                            <div class="sm:col-span-4">
+                                <button type="submit" id="dns-test-btn" class="bg-indigo-600 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">解析一次</button>
+                            </div>
+                        </form>
+                        <div id="dns-test-result" class="mt-3 text-sm text-gray-400">尚未测试</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 最近查询 -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50/50">
+                    <h2 class="text-base font-semibold text-gray-700">最近查询</h2>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs text-gray-400">停在本页时每 3 秒刷新</span>
+                        <button onclick="clearDNSStats()" class="text-xs text-red-500 hover:text-red-700 font-medium">清空统计与缓存</button>
+                    </div>
+                </div>
+                <div class="overflow-x-auto max-h-[420px] overflow-y-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead class="sticky top-0 bg-gray-50">
+                            <tr class="text-gray-500 text-xs uppercase tracking-wider">
+                                <th class="px-4 py-3 font-medium">时间</th>
+                                <th class="px-4 py-3 font-medium">客户端</th>
+                                <th class="px-4 py-3 font-medium">域名</th>
+                                <th class="px-4 py-3 font-medium">类型</th>
+                                <th class="px-4 py-3 font-medium">来源</th>
+                                <th class="px-4 py-3 font-medium">结果</th>
+                                <th class="px-4 py-3 font-medium text-right">耗时</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dns-recent-body" class="divide-y divide-gray-200 text-xs font-mono">
+                            <tr><td colspan="7" class="px-4 py-4 text-center text-gray-400">暂无查询</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ Tab 5: Ping ============ -->
+        <section id="tab-ping" class="hidden">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">已发送 / 已回应</div>
+                    <div id="ping-stat-count" class="text-2xl font-bold text-indigo-600 mt-2">0 / 0</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">丢包率</div>
+                    <div id="ping-stat-loss" class="text-2xl font-bold text-emerald-600 mt-2">-</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">平均延迟</div>
+                    <div id="ping-stat-avg" class="text-2xl font-bold text-amber-600 mt-2">-</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">最小 / 最大 / 抖动</div>
+                    <div id="ping-stat-range" class="text-lg font-bold text-gray-700 mt-3">-</div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Ping 参数 -->
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 lg:col-span-1">
+                    <h2 class="text-lg font-semibold text-gray-700 mb-4">Ping</h2>
+                    <form onsubmit="startDiag(event, 'ping')" class="space-y-4">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">目标（IP 或域名）</label>
+                            <input type="text" id="ping-target" required placeholder="1.1.1.1" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">源 IP（决定走哪个上游）</label>
+                            <select id="ping-source" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"></select>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">次数（0 = 一直 ping）</label>
+                                <input type="number" id="ping-count" value="4" min="0" max="1000" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">间隔 (毫秒)</label>
+                                <input type="number" id="ping-interval" value="1000" min="100" max="10000" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">超时 (毫秒)</label>
+                                <input type="number" id="ping-timeout" value="2000" min="100" max="10000" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">包大小 (字节)</label>
+                                <input type="number" id="ping-size" value="56" min="0" max="1400" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                        </div>
+                        <div class="flex gap-2">
+                            <button type="submit" id="ping-start-btn" class="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm hover:bg-indigo-700 transition font-medium">开始</button>
+                            <button type="button" id="ping-stop-btn" onclick="stopDiag('ping')" class="hidden flex-1 bg-red-50 text-red-600 py-2 rounded-lg text-sm hover:bg-red-100 transition font-medium">停止</button>
+                        </div>
+                        <div id="ping-msg" class="text-xs"></div>
+                        <p class="text-xs text-gray-400 leading-relaxed border-t pt-3">
+                            走 ICMP echo。指定源 IP 就是从那块网卡发出去，用来验证"这条线路到底通不通"——
+                            同一个目标换不同源 IP 的结果，往往就是不同路由器的差别。
+                            macOS 上普通用户也能 ping；Linux 非 root 时需要放开 <span class="font-mono">net.ipv4.ping_group_range</span>。
+                        </p>
+                    </form>
+                </div>
+
+                <!-- Ping 结果 -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden lg:col-span-2">
+                    <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50/50">
+                        <h2 class="text-base font-semibold text-gray-700">探测结果</h2>
+                        <span id="ping-state" class="text-xs text-gray-400">尚未开始</span>
+                    </div>
+                    <div id="ping-note" class="hidden px-6 py-3 border-b text-xs"></div>
+                    <div class="overflow-x-auto max-h-[520px] overflow-y-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead class="sticky top-0 bg-gray-50">
+                                <tr class="text-gray-500 text-xs uppercase tracking-wider">
+                                    <th class="px-4 py-3 font-medium">序号</th>
+                                    <th class="px-4 py-3 font-medium">来自</th>
+                                    <th class="px-4 py-3 font-medium">结果</th>
+                                    <th class="px-4 py-3 font-medium">TTL</th>
+                                    <th class="px-4 py-3 font-medium">时间</th>
+                                    <th class="px-4 py-3 font-medium text-right">耗时</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ping-body" class="divide-y divide-gray-200 text-xs font-mono">
+                                <tr><td colspan="6" class="px-4 py-6 text-center text-gray-400">填好目标后点「开始」</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ Tab 6: 路由追踪 ============ -->
+        <section id="tab-trace" class="hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Traceroute 参数 -->
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 lg:col-span-1">
+                    <h2 class="text-lg font-semibold text-gray-700 mb-4">路由追踪 (Traceroute)</h2>
+                    <form onsubmit="startDiag(event, 'trace')" class="space-y-4">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">目标（IP 或域名）</label>
+                            <input type="text" id="trace-target" required placeholder="1.1.1.1" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">源 IP（决定走哪个上游）</label>
+                            <select id="trace-source" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"></select>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">最大跳数</label>
+                                <input type="number" id="trace-max-hops" value="30" min="1" max="64" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">每跳探测次数</label>
+                                <input type="number" id="trace-probes" value="3" min="1" max="5" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">每跳超时 (毫秒)</label>
+                                <input type="number" id="trace-timeout" value="2000" min="100" max="10000" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div class="flex items-end pb-2">
+                                <label class="flex items-center gap-2 text-sm text-gray-600">
+                                    <input type="checkbox" id="trace-resolve" class="rounded" checked> 反查域名
+                                </label>
+                            </div>
+                        </div>
+                        <div class="flex gap-2">
+                            <button type="submit" id="trace-start-btn" class="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm hover:bg-indigo-700 transition font-medium">开始追踪</button>
+                            <button type="button" id="trace-stop-btn" onclick="stopDiag('trace')" class="hidden flex-1 bg-red-50 text-red-600 py-2 rounded-lg text-sm hover:bg-red-100 transition font-medium">停止</button>
+                        </div>
+                        <div id="trace-msg" class="text-xs"></div>
+                        <p class="text-xs text-gray-400 leading-relaxed border-t pt-3">
+                            逐跳加大 TTL，让沿途每个路由器各回一个超时报文，从而把整条路径问出来。
+                            第一跳通常就是这个源 IP 对应的路由器，很适合确认"流量是不是真的走了那条线"。
+                            <span class="text-amber-600">Linux 上需要 root</span>：非特权 ICMP 套接字收不到中间路由器的回包，那样整趟都会是超时。
+                            中间设备不回 ICMP 时显示 <span class="font-mono">*</span>，属正常现象；连续 5 跳无回应会提前结束。
+                        </p>
+                    </form>
+                </div>
+
+                <!-- Traceroute 结果 -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden lg:col-span-2">
+                    <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50/50">
+                        <h2 class="text-base font-semibold text-gray-700">路径</h2>
+                        <span id="trace-state" class="text-xs text-gray-400">尚未开始</span>
+                    </div>
+                    <div id="trace-note" class="hidden px-6 py-3 border-b text-xs"></div>
+                    <div class="overflow-x-auto max-h-[600px] overflow-y-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead class="sticky top-0 bg-gray-50">
+                                <tr class="text-gray-500 text-xs uppercase tracking-wider">
+                                    <th class="px-4 py-3 font-medium">跳</th>
+                                    <th class="px-4 py-3 font-medium">地址</th>
+                                    <th class="px-4 py-3 font-medium">各次耗时</th>
+                                    <th class="px-4 py-3 font-medium text-right">最快</th>
+                                </tr>
+                            </thead>
+                            <tbody id="trace-body" class="divide-y divide-gray-200 text-xs">
+                                <tr><td colspan="4" class="px-4 py-6 text-center text-gray-400">填好目标后点「开始追踪」</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
     </div>
 
     <script>
-        const TABS = ['proxy', 'routes'];
+        const TABS = ['proxy', 'routes', 'nic', 'dns', 'ping', 'trace'];
         const ACTIVE_TAB_CLASSES = ['border-b-2', 'border-indigo-600', 'text-indigo-600'];
         const INACTIVE_TAB_CLASSES = ['text-gray-500', 'hover:text-gray-700'];
         let activeTab = 'proxy';
         let routesTabLoaded = false;
+        let nicTabLoaded = false;
+        let dnsTabLoaded = false;
+        let diagTabLoaded = {ping: false, trace: false};
 
         function switchTab(name) {
             if (!TABS.includes(name)) return;
@@ -238,6 +839,21 @@
                 loadRoutes();
                 loadSystemRoutes();
             }
+            if (name === 'nic' && !nicTabLoaded) {
+                nicTabLoaded = true;
+                loadNICs();
+                loadWiFi();
+            }
+            if (name === 'dns' && !dnsTabLoaded) {
+                dnsTabLoaded = true;
+                loadDNS();
+            }
+            // 诊断页首次进入时把网卡列表填上，并接回上一次的诊断（页面刷新过也能续上）
+            if ((name === 'ping' || name === 'trace') && !diagTabLoaded[name]) {
+                diagTabLoaded[name] = true;
+                loadDiagInterfaces(name);
+                pollDiag(name);
+            }
             if (name === 'proxy') loadStats();
         }
 
@@ -255,13 +871,15 @@
         let proxyRunning = false;
 
         function renderUptime() {
-            // 停止状态没有"已运行多久"可言，只有进程自身的运行时长
+            renderDNSUptime();
             if (!proxyUptimeBase) return;
             let elapsed = Math.floor((Date.now() - proxyUptimeBase.since) / 1000);
+            // 程序运行时长属于整个工具，放在头部，切到哪个标签页都在走
+            document.getElementById('process-uptime').textContent =
+                '· ' + formatInterval(proxyUptimeBase.process + elapsed);
+            // 代理停着时没有"已运行多久"可言
             document.getElementById('proxy-uptime').textContent =
                 proxyRunning ? formatInterval(proxyUptimeBase.proxy + elapsed) : '-';
-            document.getElementById('process-uptime').textContent =
-                '程序已运行 ' + formatInterval(proxyUptimeBase.process + elapsed);
         }
 
         const TOGGLE_START_CLASSES = ['bg-emerald-600', 'text-white', 'hover:bg-emerald-700'];
@@ -290,6 +908,7 @@
 
         function applyStatus(data) {
             document.getElementById('new-socks-port').value = data.socks_port;
+            document.getElementById('new-dns').value = data.dns || '';
             currentOutboundIP = data.outbound_ip || '';
 
             // 记下服务端的启动时刻，之后本地自增，不用为了走秒反复请求
@@ -491,7 +1110,7 @@
                     tr.className = 'hover:bg-gray-50';
                     tr.innerHTML = `
                         <td class="px-4 py-2 text-gray-800">${escapeHtml(c.client_addr)}</td>
-                        <td class="px-4 py-2 text-gray-600">${escapeHtml(c.target_addr)}</td>
+                        <td class="px-4 py-2 text-gray-600">${escapeHtml(c.target_addr || '-')}</td>
                         <td class="px-4 py-2 text-right text-indigo-600">${formatBytes(c.bytes_in)}</td>
                         <td class="px-4 py-2 text-right text-emerald-600">${formatBytes(c.bytes_out)}</td>
                     `;
@@ -615,7 +1234,7 @@
                 <td class="px-4 py-3 font-mono ${r.paused ? 'text-gray-400' : 'text-gray-800'}">
                     ${nested ? '<span class="text-gray-300 mr-1">└</span>' : ''}${escapeHtml(r.destination)}
                     <span class="ml-1 px-1.5 py-0.5 rounded text-xs font-sans ${badgeClass}">${badgeText}</span>
-                    <div class="text-xs font-sans text-gray-400 mt-0.5">${origin} · 添加于 ${formatTime(r.created_at)}</div>
+                    <div class="text-xs font-sans text-gray-400 mt-0.5">${origin}${r.interface ? ' · 作用域 ' + escapeHtml(r.interface) : ''} · 添加于 ${formatTime(r.created_at)}</div>
                 </td>
                 <td class="px-4 py-3 font-mono ${r.paused ? 'text-gray-400' : 'text-gray-600'}">${escapeHtml(r.gateway)}</td>
                 <td class="px-4 py-3 text-right align-top whitespace-nowrap">
@@ -861,7 +1480,7 @@
                 let res = await fetch('/api/status', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({socks_port: port, outbound_ip: outboundIp})
+                    body: JSON.stringify({socks_port: port, outbound_ip: outboundIp, dns: document.getElementById('new-dns').value.trim()})
                 });
                 if (res.ok) {
                     alert(proxyRunning
@@ -884,6 +1503,1029 @@
             }
         }
 
+        // ===================== 网卡配置 =====================
+
+        let nicList = [];        // 最近一次读到的网卡配置
+        let wifiState = {};      // /api/net/wifi 的返回
+        const METHOD_LABEL = {dhcp: '自动 (DHCP)', manual: '手动', off: '已禁用', unknown: '未知'};
+
+        function methodBadge(method) {
+            let cls = method === 'manual' ? 'bg-indigo-50 text-indigo-700'
+                    : method === 'dhcp' ? 'bg-emerald-50 text-emerald-700'
+                    : 'bg-gray-100 text-gray-500';
+            return `<span class="px-2 py-0.5 rounded text-xs ${cls}">${METHOD_LABEL[method] || method}</span>`;
+        }
+
+        function dnsText(cfg) {
+            if (cfg.dns && cfg.dns.length) return escapeHtml(cfg.dns.join(', '));
+            return '<span class="text-gray-400">自动 (DHCP 下发)</span>';
+        }
+
+        async function loadNICs() {
+            let tbody = document.getElementById('nic-table-body');
+            let errBox = document.getElementById('nic-error');
+            try {
+                let res = await fetch('/api/net/interfaces');
+                let data = await res.json();
+                nicList = data.interfaces || [];
+
+                if (data.error) {
+                    errBox.textContent = data.error;
+                    errBox.classList.remove('hidden');
+                } else {
+                    errBox.classList.add('hidden');
+                }
+
+                tbody.innerHTML = '';
+                if (!nicList.length) {
+                    tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-4 text-center text-gray-400">未读取到网卡</td></tr>`;
+                } else {
+                    nicList.forEach((c, i) => tbody.insertAdjacentHTML('beforeend', nicRow(c, i)));
+                }
+
+                // Wi-Fi 配置档表单里的网卡下拉同步刷新
+                let sel = document.getElementById('wp-service');
+                let keep = sel.value;
+                sel.innerHTML = '';
+                nicList.forEach(c => sel.appendChild(makeOption(c.service, `${c.service}（${c.device || '-'}${c.type === 'wifi' ? ' · Wi-Fi' : ''}）`)));
+                sel.value = keep;
+                if (!keep || sel.selectedIndex === -1) {
+                    // 默认选中 Wi-Fi 网卡，配置档多半是配给它的
+                    let wifiIdx = nicList.findIndex(c => c.type === 'wifi');
+                    sel.selectedIndex = wifiIdx >= 0 ? wifiIdx : 0;
+                }
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-4 text-center text-red-500">读取失败: ${escapeHtml(String(err))}</td></tr>`;
+            }
+        }
+
+        function nicRow(c, i) {
+            let name = `<div class="font-medium text-gray-800">${escapeHtml(c.service || c.device)}</div>
+                <div class="text-xs text-gray-400 font-mono">${escapeHtml(c.device || '')}${c.type === 'wifi' ? ' · Wi-Fi' : c.type === 'ethernet' ? ' · 有线' : ''}${c.ssid ? ' · ' + escapeHtml(c.ssid) : ''}</div>`;
+            let state = c.disabled ? '<div class="text-xs text-gray-400 mt-0.5">服务已停用</div>'
+                      : c.active ? '' : '<div class="text-xs text-amber-600 mt-0.5">未连接</div>';
+            let addr = c.ip ? `<span class="font-mono">${escapeHtml(c.ip)}</span><span class="text-gray-400 font-mono text-xs"> / ${escapeHtml(c.mask || '')}</span>` : '<span class="text-gray-400">-</span>';
+            return `<tr class="hover:bg-gray-50 align-top">
+                <td class="px-4 py-3">${name}${state}${c.error ? `<div class="text-xs text-red-500 mt-0.5">${escapeHtml(c.error)}</div>` : ''}</td>
+                <td class="px-4 py-3">${methodBadge(c.method)}</td>
+                <td class="px-4 py-3">${addr}</td>
+                <td class="px-4 py-3 font-mono">${c.gateway ? escapeHtml(c.gateway) : '<span class="text-gray-400 font-sans">-</span>'}</td>
+                <td class="px-4 py-3 font-mono text-xs">${dnsText(c)}</td>
+                <td class="px-4 py-3 text-right"><button onclick="openNICForm(${i})" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">配置</button></td>
+            </tr>`;
+        }
+
+        function openNICForm(i) {
+            let c = nicList[i];
+            if (!c) return;
+            document.getElementById('nic-form-card').dataset.service = c.service;
+            document.getElementById('nic-form-card').dataset.device = c.device || '';
+            document.getElementById('nic-form-title').textContent = c.service + (c.device ? ' (' + c.device + ')' : '');
+            document.getElementById('nic-method').value = c.method === 'manual' ? 'manual' : 'dhcp';
+            document.getElementById('nic-ip').value = c.ip || '';
+            document.getElementById('nic-mask').value = c.mask || '';
+            document.getElementById('nic-gateway').value = c.gateway || '';
+            document.getElementById('nic-dns').value = (c.dns || []).join(', ');
+            document.getElementById('nic-form-msg').textContent = '';
+            // 只有 Wi-Fi 网卡才谈得上"存为当前 Wi-Fi 的配置档"
+            document.getElementById('nic-save-profile-btn').classList.toggle('hidden', c.type !== 'wifi');
+            document.getElementById('nic-form-card').classList.remove('hidden');
+            onNICMethodChange();
+            document.getElementById('nic-form-card').scrollIntoView({behavior: 'smooth', block: 'center'});
+        }
+
+        function closeNICForm() {
+            document.getElementById('nic-form-card').classList.add('hidden');
+        }
+
+        function onNICMethodChange() {
+            let manual = document.getElementById('nic-method').value === 'manual';
+            document.querySelectorAll('.nic-manual-field').forEach(el => el.classList.toggle('hidden', !manual));
+        }
+
+        // 默认档是兜底的，不针对某个具体 Wi-Fi：名字可留空，也不该绑指纹
+        function onWPDefaultChange() {
+            let isDefault = document.getElementById('wp-default').checked;
+            let ssid = document.getElementById('wp-ssid');
+            ssid.required = !isDefault;
+            ssid.placeholder = isDefault ? '留空则叫「其他 Wi-Fi」' : '例: DemoNet_5G';
+            let bind = document.getElementById('wp-bind-current');
+            bind.disabled = isDefault;
+            if (isDefault) bind.checked = false;
+        }
+
+        function onWPMethodChange() {
+            let manual = document.getElementById('wp-method').value === 'manual';
+            document.querySelectorAll('.wp-manual-field').forEach(el => el.classList.toggle('hidden', !manual));
+        }
+
+        function parseDNSInput(value) {
+            return value.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean);
+        }
+
+        function readSettings(prefix) {
+            let method = document.getElementById(prefix + '-method').value;
+            let s = {method, dns: parseDNSInput(document.getElementById(prefix + '-dns').value)};
+            if (method === 'manual') {
+                s.ip = document.getElementById(prefix + '-ip').value.trim();
+                s.mask = document.getElementById(prefix + '-mask').value.trim();
+                s.gateway = document.getElementById(prefix + '-gateway').value.trim();
+            }
+            return s;
+        }
+
+        function showMsg(id, text, ok) {
+            let el = document.getElementById(id);
+            el.className = 'mt-3 text-xs ' + (ok ? 'text-emerald-600' : 'text-red-600');
+            el.textContent = text;
+        }
+
+        async function submitNICForm(e) {
+            e.preventDefault();
+            let card = document.getElementById('nic-form-card');
+            let service = card.dataset.service;
+            let settings = readSettings('nic');
+
+            // 改网卡配置会让这张网卡断一下，如果管理页正走它就会断线，先确认
+            if (!confirm(`确定把 ${service} 改成「${settings.method === 'dhcp' ? '自动 (DHCP)' : settings.ip + '/' + settings.mask}」？\n\n该网卡会短暂断线，如果你正通过它访问本页面，页面会断开。`)) return;
+
+            showMsg('nic-form-msg', '正在下发…', true);
+            try {
+                let res = await fetch('/api/net/apply', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({service, device: card.dataset.device, ...settings}),
+                });
+                let text = await res.text();
+                if (!res.ok) { showMsg('nic-form-msg', '应用失败: ' + text, false); return; }
+                showMsg('nic-form-msg', '已应用: ' + (JSON.parse(text).applied || ''), true);
+                loadNICs();
+            } catch (err) {
+                showMsg('nic-form-msg', '请求出错: ' + err, false);
+            }
+        }
+
+        // 把当前表单里的配置直接存成"当前所连 Wi-Fi"的配置档
+        function saveAsWiFiProfile() {
+            let card = document.getElementById('nic-form-card');
+            document.getElementById('wp-service').value = card.dataset.service;
+            document.getElementById('wp-ssid').value = wifiState.current_ssid || '';
+            document.getElementById('wp-bind-current').checked = true;
+            document.getElementById('wp-default').checked = false;
+            onWPDefaultChange();
+            let s = readSettings('nic');
+            document.getElementById('wp-method').value = s.method;
+            document.getElementById('wp-ip').value = s.ip || '';
+            document.getElementById('wp-mask').value = s.mask || '';
+            document.getElementById('wp-gateway').value = s.gateway || '';
+            document.getElementById('wp-dns').value = (s.dns || []).join(', ');
+            onWPMethodChange();
+            document.getElementById('wp-ssid').focus();
+            document.getElementById('wp-ssid').scrollIntoView({behavior: 'smooth', block: 'center'});
+        }
+
+        async function loadWiFi() {
+            try {
+                let res = await fetch('/api/net/wifi');
+                wifiState = await res.json();
+            } catch (err) {
+                document.getElementById('wifi-current').textContent = '读取失败';
+                console.error('Failed to load wifi status:', err);
+                return;
+            }
+
+            document.getElementById('wifi-current').textContent = wifiState.current_label || '未连接 Wi-Fi';
+            let interval = wifiState.watch_interval_seconds || 0;
+            let watchText = interval > 0
+                ? `每 ${formatInterval(interval)}检查一次，换网即自动套用配置档`
+                : '已关闭（启动参数 -wifi-watch 0）';
+            if (wifiState.pending_switch) watchText += `（已检测到换网，最迟 ${formatInterval(interval)}内套用）`;
+            document.getElementById('wifi-watch').textContent = watchText;
+
+            let sw = wifiState.last_switch;
+            document.getElementById('wifi-last-switch').innerHTML = sw
+                ? `<span class="${sw.ok ? 'text-gray-700' : 'text-red-600'}">${escapeHtml(sw.ssid || '')} · ${escapeHtml(sw.detail || '')}</span><br><span class="text-gray-400">${formatTime(sw.at)}</span>`
+                : '<span class="text-gray-400">尚未发生</span>';
+
+            let errBox = document.getElementById('wifi-ssid-error');
+            if (wifiState.ssid_error) {
+                errBox.textContent = wifiState.ssid_error;
+                errBox.classList.remove('hidden');
+            } else {
+                errBox.classList.add('hidden');
+            }
+
+            let profiles = wifiState.profiles || [];
+            let hasDefault = profiles.some(p => p.is_default);
+            document.getElementById('wifi-profile-hint').textContent = profiles.length
+                ? `${profiles.length} 个配置档${hasDefault ? '（含 1 个默认档）' : '，没有默认档：连到没单独配置的 Wi-Fi 时不会做任何改动'} · 存于 ${wifiState.profile_file || '内存（未持久化）'}`
+                : '还没有配置档：连上某个 Wi-Fi 后在这里保存一份，之后连到它就会自动套用；再存一个「默认档」用来兜底其他 Wi-Fi。';
+
+            let tbody = document.getElementById('wifi-profiles-body');
+            tbody.innerHTML = '';
+            if (!profiles.length) {
+                tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-4 text-center text-gray-400">暂无配置档</td></tr>`;
+                return;
+            }
+            profiles.forEach(p => tbody.insertAdjacentHTML('beforeend', wifiProfileRow(p)));
+        }
+
+        function settingsText(s) {
+            if (!s) return '-';
+            let parts = [];
+            if (s.method === 'manual') {
+                parts.push(`${escapeHtml(s.ip || '')} / ${escapeHtml(s.mask || '')}`);
+                if (s.gateway) parts.push('网关 ' + escapeHtml(s.gateway));
+            } else {
+                parts.push('自动 (DHCP)');
+            }
+            parts.push(s.dns && s.dns.length ? 'DNS ' + escapeHtml(s.dns.join(', ')) : 'DNS 跟随 DHCP');
+            return parts.join(' · ');
+        }
+
+        function wifiProfileRow(p) {
+            // 命中哪一档由后端算（可能是兜底的默认档），前端只管显示
+            let isCurrent = wifiState.matched_ssid && wifiState.matched_ssid === p.ssid;
+            let badges = '';
+            if (p.is_default) badges += '<span class="ml-2 px-2 py-0.5 rounded text-xs bg-indigo-50 text-indigo-700">默认</span>';
+            if (isCurrent) badges += '<span class="ml-2 px-2 py-0.5 rounded text-xs bg-emerald-50 text-emerald-700">当前命中</span>';
+            let name = `<div class="font-medium text-gray-800">${escapeHtml(p.ssid)}${badges}</div>`;
+            if (p.network_id) name += `<div class="text-xs text-gray-400 font-mono" title="${escapeHtml(p.network_id)}">指纹 ${escapeHtml(p.network_id.slice(0, 8))}</div>`;
+
+            let status = p.enabled
+                ? '<span class="px-2 py-0.5 rounded text-xs bg-emerald-50 text-emerald-700">已启用</span>'
+                : '<span class="px-2 py-0.5 rounded text-xs bg-gray-200 text-gray-600">已停用</span>';
+            if (p.last_applied_at) status += `<div class="text-xs text-gray-400 mt-1">上次套用 ${formatTime(p.last_applied_at)}</div>`;
+            if (p.last_error) status += `<div class="text-xs text-red-500 mt-1">${escapeHtml(p.last_error)}</div>`;
+
+            let ssid = encodeURIComponent(p.ssid);
+            return `<tr class="hover:bg-gray-50 align-top">
+                <td class="px-4 py-3">${name}</td>
+                <td class="px-4 py-3 text-xs">${escapeHtml(p.service)}<div class="text-gray-400 font-mono">${escapeHtml(p.device || '')}</div></td>
+                <td class="px-4 py-3 text-xs">${settingsText(p.settings)}</td>
+                <td class="px-4 py-3">${status}</td>
+                <td class="px-4 py-3 text-right whitespace-nowrap">
+                    <button onclick="applyWiFiProfile('${ssid}')" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">立即应用</button>
+                    <button onclick="toggleWiFiProfile('${ssid}', ${p.enabled ? 'false' : 'true'})" class="ml-3 text-xs ${p.enabled ? 'text-gray-500 hover:text-gray-700' : 'text-emerald-600 hover:text-emerald-800'} font-medium">${p.enabled ? '停用' : '启用'}</button>
+                    <button onclick="deleteWiFiProfile('${ssid}')" class="ml-3 text-xs text-red-500 hover:text-red-700 font-medium">删除</button>
+                </td>
+            </tr>`;
+        }
+
+        async function submitWiFiProfile(e) {
+            e.preventDefault();
+            let isDefault = document.getElementById('wp-default').checked;
+            let body = {
+                is_default: isDefault,
+                ssid: document.getElementById('wp-ssid').value.trim(),
+                service: document.getElementById('wp-service').value,
+                device: (nicList.find(c => c.service === document.getElementById('wp-service').value) || {}).device || '',
+                settings: readSettings('wp'),
+            };
+            // 勾了"绑定当前 Wi-Fi"就把系统给的网络指纹一起存下来，
+            // 这样即便系统不给读 SSID 也能认出是同一个网络
+            if (!isDefault && document.getElementById('wp-bind-current').checked && wifiState.current_network_id) {
+                body.network_id = wifiState.current_network_id;
+            }
+
+            try {
+                let res = await fetch('/api/net/wifi/profiles', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+                let text = await res.text();
+                if (!res.ok) { showMsg('wp-form-msg', '保存失败: ' + text, false); return; }
+                showMsg('wp-form-msg', '已保存配置档 ' + (JSON.parse(text).profile || {}).ssid, true);
+                loadWiFi();
+            } catch (err) {
+                showMsg('wp-form-msg', '请求出错: ' + err, false);
+            }
+        }
+
+        async function applyWiFiProfile(ssidEnc) {
+            let ssid = decodeURIComponent(ssidEnc);
+            if (!confirm(`确定立即把 ${ssid} 的配置档套用到网卡？\n\n对应网卡会短暂断线。`)) return;
+            try {
+                let res = await fetch('/api/net/wifi/apply', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ssid}),
+                });
+                if (!res.ok) { alert('应用失败: ' + await res.text()); }
+                loadNICs();
+                loadWiFi();
+            } catch (err) {
+                alert('请求出错: ' + err);
+            }
+        }
+
+        async function toggleWiFiProfile(ssidEnc, enabled) {
+            try {
+                let res = await fetch('/api/net/wifi/profiles', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ssid: decodeURIComponent(ssidEnc), enabled}),
+                });
+                if (!res.ok) alert('操作失败: ' + await res.text());
+                loadWiFi();
+            } catch (err) {
+                alert('请求出错: ' + err);
+            }
+        }
+
+        async function deleteWiFiProfile(ssidEnc) {
+            let ssid = decodeURIComponent(ssidEnc);
+            if (!confirm(`删除 ${ssid} 的配置档？（只删记录，不会改动当前网卡配置）`)) return;
+            try {
+                let res = await fetch('/api/net/wifi/profiles', {
+                    method: 'DELETE',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ssid}),
+                });
+                if (!res.ok) alert('删除失败: ' + await res.text());
+                loadWiFi();
+            } catch (err) {
+                alert('请求出错: ' + err);
+            }
+        }
+
+        // ==================== DNS 服务 ====================
+        let dnsSettings = null;
+        let dnsRunning = false;
+        let dnsUptimeBase = null;
+        let dnsUpstreamStats = {};
+        // >= 0 表示表单正在改某一条已有上游，而不是新增
+        let dnsUpstreamEditIndex = -1;
+
+        const DNS_TYPE_LABELS = {
+            udp: ['UDP', 'bg-gray-100 text-gray-600'],
+            tcp: ['TCP', 'bg-gray-100 text-gray-600'],
+            tls: ['DoT', 'bg-emerald-50 text-emerald-700'],
+            https: ['DoH', 'bg-indigo-50 text-indigo-700'],
+        };
+        const DNS_SOURCE_LABELS = {
+            cache: ['缓存', 'bg-emerald-50 text-emerald-700'],
+            hosts: ['静态', 'bg-sky-50 text-sky-700'],
+            upstream: ['上游', 'bg-indigo-50 text-indigo-700'],
+            error: ['失败', 'bg-red-50 text-red-600'],
+        };
+
+        function badge(label, classes) {
+            return `<span class="px-2 py-0.5 rounded text-xs font-medium ${classes}">${escapeHtml(label)}</span>`;
+        }
+
+        function renderDNSUptime() {
+            let el = document.getElementById('dns-uptime');
+            if (!el) return;
+            if (!dnsRunning || !dnsUptimeBase) {
+                el.textContent = '-';
+                return;
+            }
+            let elapsed = Math.floor((Date.now() - dnsUptimeBase.since) / 1000);
+            el.textContent = formatInterval(dnsUptimeBase.seconds + elapsed);
+        }
+
+        function renderDNSState() {
+            let state = document.getElementById('dns-state');
+            state.textContent = dnsRunning ? '运行中' : '已停止';
+            state.className = 'font-semibold ' + (dnsRunning ? 'text-green-600' : 'text-gray-500');
+
+            let btn = document.getElementById('dns-toggle-btn');
+            btn.disabled = false;
+            btn.textContent = dnsRunning ? '停止 DNS' : '启动 DNS';
+            btn.className = 'px-3 py-1.5 rounded-lg text-xs font-medium transition ' +
+                (dnsRunning ? TOGGLE_STOP_CLASSES : TOGGLE_START_CLASSES).join(' ');
+
+            // 服务停着时保存配置不会把它拉起来，按钮文案要说清楚
+            document.getElementById('dns-save-btn').textContent = dnsRunning ? '保存并重启服务' : '保存配置';
+        }
+
+        function applyDNSStatus(data) {
+            dnsSettings = data.settings || {};
+            if (!Array.isArray(dnsSettings.upstreams)) dnsSettings.upstreams = [];
+            if (!Array.isArray(dnsSettings.hosts)) dnsSettings.hosts = [];
+            dnsRunning = !!data.running;
+            dnsUptimeBase = {seconds: data.uptime_seconds || 0, since: Date.now()};
+
+            document.getElementById('dns-listen').value = dnsSettings.listen || '';
+            document.getElementById('dns-port').value = dnsSettings.port || '';
+            document.getElementById('dns-strategy').value = dnsSettings.strategy || 'sequential';
+            document.getElementById('dns-timeout').value = dnsSettings.timeout_ms || '';
+            document.getElementById('dns-cache').checked = !!dnsSettings.cache;
+            document.getElementById('dns-cache-size').value = dnsSettings.cache_size || '';
+            document.getElementById('dns-min-ttl').value = dnsSettings.min_ttl || 0;
+            document.getElementById('dns-max-ttl').value = dnsSettings.max_ttl || 0;
+            document.getElementById('dns-stat-entries').textContent = data.cache_entries || 0;
+            document.getElementById('dns-config-file').textContent =
+                data.config_file ? ('配置文件: ' + data.config_file) : '未启用持久化，配置只在本次运行内有效';
+
+            renderDNSState();
+            renderDNSUptime();
+            renderDNSUpstreams();
+            renderDNSHosts();
+            renderDNSTestUpstreams();
+        }
+
+        async function loadDNS() {
+            try {
+                let res = await fetch('/api/dns');
+                applyDNSStatus(await res.json());
+            } catch (err) {
+                console.error('Failed to load DNS config:', err);
+            }
+            loadDNSStats();
+        }
+
+        // postDNSSettings 每次都提交整份配置：服务端会统一校验并落盘，
+        // 前端不用再操心增量合并
+        async function postDNSSettings(settings, msgId, okText) {
+            try {
+                let res = await fetch('/api/dns', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(settings),
+                });
+                if (!res.ok) {
+                    let text = await res.text();
+                    if (msgId) showMsg(msgId, '保存失败: ' + text, false); else alert('保存失败: ' + text);
+                    return false;
+                }
+                applyDNSStatus(await res.json());
+                if (msgId) showMsg(msgId, okText || '已保存', true);
+                return true;
+            } catch (err) {
+                if (msgId) showMsg(msgId, '请求出错: ' + err, false); else alert('请求出错: ' + err);
+                return false;
+            }
+        }
+
+        function saveDNSConfig() {
+            if (!dnsSettings) return;
+            let next = Object.assign({}, dnsSettings, {
+                listen: document.getElementById('dns-listen').value.trim(),
+                port: document.getElementById('dns-port').value.trim(),
+                strategy: document.getElementById('dns-strategy').value,
+                timeout_ms: parseInt(document.getElementById('dns-timeout').value, 10) || 0,
+                cache: document.getElementById('dns-cache').checked,
+                cache_size: parseInt(document.getElementById('dns-cache-size').value, 10) || 0,
+                min_ttl: parseInt(document.getElementById('dns-min-ttl').value, 10) || 0,
+                max_ttl: parseInt(document.getElementById('dns-max-ttl').value, 10) || 0,
+            });
+            postDNSSettings(next, 'dns-config-msg', dnsRunning ? '已保存并重启服务' : '已保存');
+        }
+
+        async function toggleDNS() {
+            let btn = document.getElementById('dns-toggle-btn');
+            let action = dnsRunning ? 'stop' : 'start';
+            btn.disabled = true;
+            btn.textContent = dnsRunning ? '停止中…' : '启动中…';
+
+            try {
+                let res = await fetch('/api/dns/power', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action}),
+                });
+                if (!res.ok) {
+                    alert((action === 'start' ? '启动失败: ' : '停止失败: ') + await res.text());
+                    await loadDNS();
+                    return;
+                }
+                applyDNSStatus(await res.json());
+            } catch (err) {
+                alert('请求出错: ' + err);
+                await loadDNS();
+            }
+        }
+
+        function onUpstreamTypeChange() {
+            let type = document.getElementById('up-type').value;
+            let secure = type === 'tls' || type === 'https';
+            document.querySelectorAll('.up-secure-field').forEach(el => el.classList.toggle('hidden', !secure));
+
+            let hints = {
+                udp: 'IP 或 IP:端口，不写端口默认 53',
+                tcp: 'IP 或 IP:端口，不写端口默认 53',
+                tls: '域名或 IP，不写端口默认 853；填 IP 时必须另外给证书域名',
+                https: '完整 URL，如 https://dns.google/dns-query',
+            };
+            document.getElementById('up-address-hint').textContent = hints[type] || '';
+            document.getElementById('up-address').placeholder =
+                type === 'https' ? 'https://dns.google/dns-query' : (type === 'tls' ? 'dns.google' : '223.5.5.5');
+        }
+
+        function parseList(value) {
+            return value.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean);
+        }
+
+        function resetUpstreamForm() {
+            dnsUpstreamEditIndex = -1;
+            ['up-address', 'up-name', 'up-hostname', 'up-bootstrap', 'up-domains'].forEach(id => {
+                document.getElementById(id).value = '';
+            });
+            document.getElementById('up-type').value = 'udp';
+            document.getElementById('up-submit-btn').textContent = '添加上游';
+            document.getElementById('up-cancel-btn').classList.add('hidden');
+            onUpstreamTypeChange();
+        }
+
+        function editUpstream(index) {
+            let u = (dnsSettings.upstreams || [])[index];
+            if (!u) return;
+            dnsUpstreamEditIndex = index;
+            document.getElementById('up-type').value = u.type || 'udp';
+            document.getElementById('up-address').value = u.address || '';
+            document.getElementById('up-name').value = u.name || '';
+            document.getElementById('up-hostname').value = u.hostname || '';
+            document.getElementById('up-bootstrap').value = u.bootstrap || '';
+            document.getElementById('up-domains').value = (u.domains || []).join(', ');
+            document.getElementById('up-submit-btn').textContent = '保存修改';
+            document.getElementById('up-cancel-btn').classList.remove('hidden');
+            onUpstreamTypeChange();
+            document.getElementById('up-address').focus();
+        }
+
+        async function submitUpstream(event) {
+            event.preventDefault();
+            if (!dnsSettings) return;
+
+            let entry = {
+                name: document.getElementById('up-name').value.trim(),
+                type: document.getElementById('up-type').value,
+                address: document.getElementById('up-address').value.trim(),
+                hostname: document.getElementById('up-hostname').value.trim(),
+                bootstrap: document.getElementById('up-bootstrap').value.trim(),
+                domains: parseList(document.getElementById('up-domains').value),
+                enabled: true,
+            };
+
+            let ups = (dnsSettings.upstreams || []).slice();
+            if (dnsUpstreamEditIndex >= 0 && ups[dnsUpstreamEditIndex]) {
+                entry.enabled = ups[dnsUpstreamEditIndex].enabled;
+                ups[dnsUpstreamEditIndex] = entry;
+            } else {
+                ups.push(entry);
+            }
+
+            let editing = dnsUpstreamEditIndex >= 0;
+            if (await postDNSSettings(Object.assign({}, dnsSettings, {upstreams: ups}), 'up-form-msg', editing ? '已更新' : '已添加')) {
+                resetUpstreamForm();
+            }
+        }
+
+        function mutateUpstreams(fn, msg) {
+            if (!dnsSettings) return;
+            let ups = (dnsSettings.upstreams || []).slice();
+            fn(ups);
+            postDNSSettings(Object.assign({}, dnsSettings, {upstreams: ups}), 'up-form-msg', msg);
+        }
+
+        function deleteUpstream(index) {
+            let u = (dnsSettings.upstreams || [])[index];
+            if (!u || !confirm(`确定删除上游「${u.name}」吗？`)) return;
+            resetUpstreamForm();
+            mutateUpstreams(ups => ups.splice(index, 1), '已删除');
+        }
+
+        function toggleUpstream(index) {
+            mutateUpstreams(ups => {
+                if (ups[index]) ups[index] = Object.assign({}, ups[index], {enabled: !ups[index].enabled});
+            }, '已更新');
+        }
+
+        // 顺序策略下先后有意义，允许上下调
+        function moveUpstream(index, delta) {
+            let target = index + delta;
+            mutateUpstreams(ups => {
+                if (target < 0 || target >= ups.length) return;
+                let tmp = ups[index];
+                ups[index] = ups[target];
+                ups[target] = tmp;
+            }, '已调整顺序');
+        }
+
+        function renderDNSUpstreams() {
+            let tbody = document.getElementById('dns-upstreams-body');
+            let ups = (dnsSettings && dnsSettings.upstreams) || [];
+            tbody.innerHTML = '';
+
+            if (!ups.length) {
+                tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-6 text-center text-gray-400">还没有上游，先在上面添加一个（例如 223.5.5.5）</td></tr>`;
+                return;
+            }
+
+            ups.forEach((u, i) => {
+                let [typeLabel, typeClass] = DNS_TYPE_LABELS[u.type] || [u.type, 'bg-gray-100 text-gray-600'];
+                let st = dnsUpstreamStats[u.name];
+                let usage = st
+                    ? `${st.queries} 次${st.errors ? ` · <span class="text-red-500">${st.errors} 失败</span>` : ''}<br><span class="text-gray-400">均 ${st.avg_ms} ms</span>`
+                    : '<span class="text-gray-400">未使用</span>';
+                let extra = [];
+                if (u.hostname) extra.push('证书域名 ' + u.hostname);
+                if (u.bootstrap) extra.push('bootstrap ' + u.bootstrap);
+
+                let tr = document.createElement('tr');
+                tr.className = 'hover:bg-gray-50' + (u.enabled ? '' : ' opacity-50');
+                tr.innerHTML = `
+                    <td class="px-4 py-3">
+                        <div class="font-medium text-gray-700">${escapeHtml(u.name)}</div>
+                        <div class="text-xs text-gray-500 font-mono break-all">${escapeHtml(u.address)}</div>
+                        ${extra.length ? `<div class="text-xs text-gray-400">${escapeHtml(extra.join(' · '))}</div>` : ''}
+                    </td>
+                    <td class="px-4 py-3">${badge(typeLabel, typeClass)}${u.enabled ? '' : '<div class="text-xs text-gray-400 mt-1">已停用</div>'}</td>
+                    <td class="px-4 py-3 text-xs">${
+                        (u.domains && u.domains.length)
+                            ? escapeHtml(u.domains.join(', '))
+                            : '<span class="text-gray-400">兜底（所有未命中的域名）</span>'
+                    }</td>
+                    <td class="px-4 py-3 text-xs text-gray-600">${usage}</td>
+                    <td class="px-4 py-3 text-right whitespace-nowrap">
+                        <button onclick="moveUpstream(${i}, -1)" class="text-gray-400 hover:text-gray-600 px-1" title="上移">↑</button>
+                        <button onclick="moveUpstream(${i}, 1)" class="text-gray-400 hover:text-gray-600 px-1" title="下移">↓</button>
+                        <button onclick="toggleUpstream(${i})" class="text-amber-600 hover:text-amber-800 text-xs font-medium px-2">${u.enabled ? '停用' : '启用'}</button>
+                        <button onclick="editUpstream(${i})" class="text-indigo-600 hover:text-indigo-800 text-xs font-medium px-2">编辑</button>
+                        <button onclick="deleteUpstream(${i})" class="text-red-500 hover:text-red-700 text-xs font-medium px-2">删除</button>
+                    </td>`;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function submitHostRecord(event) {
+            event.preventDefault();
+            if (!dnsSettings) return;
+            let domain = document.getElementById('host-domain').value.trim();
+            let ip = document.getElementById('host-ip').value.trim();
+            let hosts = (dnsSettings.hosts || []).concat([{domain, ip}]);
+
+            postDNSSettings(Object.assign({}, dnsSettings, {hosts}), 'host-form-msg', '已添加').then(ok => {
+                if (ok) {
+                    document.getElementById('host-domain').value = '';
+                    document.getElementById('host-ip').value = '';
+                }
+            });
+        }
+
+        function deleteHostRecord(index) {
+            if (!dnsSettings) return;
+            let hosts = (dnsSettings.hosts || []).slice();
+            hosts.splice(index, 1);
+            postDNSSettings(Object.assign({}, dnsSettings, {hosts}), 'host-form-msg', '已删除');
+        }
+
+        function renderDNSHosts() {
+            let tbody = document.getElementById('dns-hosts-body');
+            let hosts = (dnsSettings && dnsSettings.hosts) || [];
+            tbody.innerHTML = '';
+
+            if (!hosts.length) {
+                tbody.innerHTML = `<tr><td colspan="3" class="px-4 py-4 text-center text-gray-400">暂无记录</td></tr>`;
+                return;
+            }
+            hosts.forEach((h, i) => {
+                let tr = document.createElement('tr');
+                tr.className = 'hover:bg-gray-50';
+                tr.innerHTML = `
+                    <td class="px-4 py-2 text-gray-700">${escapeHtml(h.domain)}</td>
+                    <td class="px-4 py-2 text-gray-600">${escapeHtml(h.ip)}</td>
+                    <td class="px-4 py-2 text-right">
+                        <button onclick="deleteHostRecord(${i})" class="text-red-500 hover:text-red-700 text-xs font-medium">删除</button>
+                    </td>`;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function renderDNSTestUpstreams() {
+            let sel = document.getElementById('dns-test-upstream');
+            let prev = sel.value;
+            sel.innerHTML = '';
+            sel.appendChild(makeOption('', '按规则自动'));
+            ((dnsSettings && dnsSettings.upstreams) || []).forEach(u => sel.appendChild(makeOption(u.name, u.name)));
+            sel.value = prev;
+            if (!sel.value) sel.value = '';
+        }
+
+        async function runDNSTest(event) {
+            event.preventDefault();
+            let btn = document.getElementById('dns-test-btn');
+            let box = document.getElementById('dns-test-result');
+            btn.disabled = true;
+            btn.textContent = '解析中…';
+            box.className = 'mt-3 text-sm text-gray-400';
+            box.textContent = '解析中…';
+
+            try {
+                let res = await fetch('/api/dns/query', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        name: document.getElementById('dns-test-name').value.trim(),
+                        type: document.getElementById('dns-test-type').value,
+                        upstream: document.getElementById('dns-test-upstream').value,
+                    }),
+                });
+                if (!res.ok) {
+                    box.className = 'mt-3 text-sm text-red-600';
+                    box.textContent = '解析失败: ' + await res.text();
+                    return;
+                }
+                let r = await res.json();
+                box.className = 'mt-3 text-sm';
+                box.innerHTML = `
+                    <div class="font-mono text-gray-800 break-all">${escapeHtml(r.answer || '（无记录）')}</div>
+                    <div class="text-xs text-gray-500 mt-1">
+                        ${escapeHtml(r.name)} ${escapeHtml(r.type)} · 上游 ${escapeHtml(r.upstream)} ·
+                        ${escapeHtml(r.status)} · ${r.cost_ms} ms
+                    </div>`;
+            } catch (err) {
+                box.className = 'mt-3 text-sm text-red-600';
+                box.textContent = '请求出错: ' + err;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '解析一次';
+            }
+        }
+
+        async function loadDNSStats() {
+            try {
+                let res = await fetch('/api/dns/stats');
+                let data = await res.json();
+
+                document.getElementById('dns-stat-queries').textContent = data.queries || 0;
+                document.getElementById('dns-stat-cache').textContent = data.cache_hits || 0;
+                document.getElementById('dns-stat-failures').textContent = data.failures || 0;
+                document.getElementById('dns-stat-entries').textContent = data.cache_entries || 0;
+
+                // 服务可能被别处（命令行、另一个页面）启停了，顺带把状态对齐
+                if (dnsRunning !== !!data.running) {
+                    dnsRunning = !!data.running;
+                    dnsUptimeBase = null;
+                    renderDNSState();
+                    renderDNSUptime();
+                }
+
+                dnsUpstreamStats = {};
+                (data.upstreams || []).forEach(st => { dnsUpstreamStats[st.name] = st; });
+                renderDNSUpstreams();
+                renderDNSRecent(data.recent || []);
+            } catch (err) {
+                console.error('Failed to load DNS stats:', err);
+            }
+        }
+
+        function renderDNSRecent(recent) {
+            let tbody = document.getElementById('dns-recent-body');
+            tbody.innerHTML = '';
+            if (!recent.length) {
+                tbody.innerHTML = `<tr><td colspan="7" class="px-4 py-6 text-center text-gray-400">暂无查询</td></tr>`;
+                return;
+            }
+
+            recent.forEach(q => {
+                let [label, cls] = DNS_SOURCE_LABELS[q.source] || [q.source, 'bg-gray-100 text-gray-600'];
+                let time = new Date(q.time);
+                let tr = document.createElement('tr');
+                tr.className = 'hover:bg-gray-50';
+                tr.innerHTML = `
+                    <td class="px-4 py-2 text-gray-500">${isNaN(time.getTime()) ? '-' : time.toLocaleTimeString('zh-CN', {hour12: false})}</td>
+                    <td class="px-4 py-2 text-gray-500">${escapeHtml(q.client)}</td>
+                    <td class="px-4 py-2 text-gray-800 break-all">${escapeHtml(q.name)}</td>
+                    <td class="px-4 py-2 text-gray-500">${escapeHtml(q.type)}</td>
+                    <td class="px-4 py-2">${badge(label, cls)} <span class="text-gray-400">${escapeHtml(q.upstream || '')}</span></td>
+                    <td class="px-4 py-2 ${q.source === 'error' ? 'text-red-600' : 'text-gray-700'} break-all">
+                        ${escapeHtml(q.status)}${q.answer ? ' · ' + escapeHtml(q.answer) : ''}
+                    </td>
+                    <td class="px-4 py-2 text-right text-gray-500">${q.cost_ms} ms</td>`;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function clearDNSStats() {
+            if (!confirm('清空 DNS 统计与缓存？配置不受影响。')) return;
+            try {
+                let res = await fetch('/api/dns/stats', {method: 'DELETE'});
+                if (!res.ok) {
+                    alert('清空失败: ' + await res.text());
+                    return;
+                }
+                loadDNSStats();
+            } catch (err) {
+                alert('请求出错: ' + err);
+            }
+        }
+
+        // ============ Ping / 路由追踪 ============
+        // 两个页签共用一套逻辑：POST 起一个后台任务，之后每秒轮询增量结果。
+        const DIAG_KIND = {ping: 'ping', trace: 'traceroute'};
+        const DIAG_STATUS = {
+            ok: ['成功', 'bg-emerald-100 text-emerald-700'],
+            timeout: ['超时', 'bg-amber-100 text-amber-700'],
+            unreachable: ['不可达', 'bg-red-100 text-red-700'],
+            error: ['出错', 'bg-red-100 text-red-700'],
+        };
+        let diagState = {ping: {id: null, running: false}, trace: {id: null, running: false}};
+
+        async function loadDiagInterfaces(tab) {
+            let sel = document.getElementById(tab + '-source');
+            let keep = sel.value;
+            sel.innerHTML = '';
+            sel.appendChild(makeOption('', '系统默认（不绑定源 IP）'));
+            try {
+                let res = await fetch('/api/interfaces');
+                let data = await res.json();
+                (data.interfaces || []).filter(i => !i.loopback).forEach(i => sel.appendChild(makeOption(i.ip, ifaceLabel(i))));
+            } catch (err) {
+                console.error('Failed to load interfaces:', err);
+            }
+            sel.value = keep || '';
+        }
+
+        function diagRequestBody(tab) {
+            let source = document.getElementById(tab + '-source').value;
+            let target = document.getElementById(tab + '-target').value.trim();
+            if (tab === 'ping') {
+                // 界面上的 0 表示"一直 ping"，后端用负数表达，0 会被当成"没填"补默认次数
+                let count = parseInt(document.getElementById('ping-count').value, 10);
+                if (isNaN(count)) count = 4;
+                return {
+                    target, source_ip: source,
+                    count: count === 0 ? -1 : count,
+                    interval_ms: parseInt(document.getElementById('ping-interval').value, 10) || 0,
+                    timeout_ms: parseInt(document.getElementById('ping-timeout').value, 10) || 0,
+                    size: parseInt(document.getElementById('ping-size').value, 10) || 0,
+                };
+            }
+            return {
+                target, source_ip: source,
+                max_hops: parseInt(document.getElementById('trace-max-hops').value, 10) || 0,
+                probes: parseInt(document.getElementById('trace-probes').value, 10) || 0,
+                timeout_ms: parseInt(document.getElementById('trace-timeout').value, 10) || 0,
+                resolve_names: document.getElementById('trace-resolve').checked,
+            };
+        }
+
+        async function startDiag(event, tab) {
+            event.preventDefault();
+            let btn = document.getElementById(tab + '-start-btn');
+            btn.disabled = true;
+            showMsg(tab + '-msg', '', true);
+
+            try {
+                let res = await fetch('/api/diag/' + DIAG_KIND[tab], {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(diagRequestBody(tab)),
+                });
+                if (!res.ok) {
+                    showMsg(tab + '-msg', (res.status === 403 ? '权限不足: ' : '启动失败: ') + await res.text(), false);
+                    return;
+                }
+                let job = (await res.json()).job;
+                diagState[tab] = {id: job.id, running: job.running};
+                renderDiag(tab, job);
+            } catch (err) {
+                showMsg(tab + '-msg', '请求出错: ' + err, false);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function stopDiag(tab) {
+            let id = diagState[tab].id;
+            if (!id) return;
+            try {
+                let res = await fetch('/api/diag/stop', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id}),
+                });
+                if (!res.ok) {
+                    showMsg(tab + '-msg', '停止失败: ' + await res.text(), false);
+                    return;
+                }
+                pollDiag(tab);
+            } catch (err) {
+                showMsg(tab + '-msg', '请求出错: ' + err, false);
+            }
+        }
+
+        async function pollDiag(tab) {
+            let st = diagState[tab];
+            // 没有任务 ID 时按类型取最近一次：页面刷新后也能接着看
+            let query = st.id ? 'id=' + encodeURIComponent(st.id) : 'kind=' + DIAG_KIND[tab];
+            try {
+                let res = await fetch('/api/diag/job?' + query);
+                let data = await res.json();
+                if (!data.found) {
+                    st.running = false;
+                    renderDiagButtons(tab, false);
+                    return;
+                }
+                st.id = data.job.id;
+                st.running = data.job.running;
+                renderDiag(tab, data.job);
+            } catch (err) {
+                console.error('Failed to poll diagnostics:', err);
+            }
+        }
+
+        function renderDiagButtons(tab, running) {
+            document.getElementById(tab + '-start-btn').classList.toggle('hidden', running);
+            document.getElementById(tab + '-stop-btn').classList.toggle('hidden', !running);
+        }
+
+        function renderDiag(tab, job) {
+            renderDiagButtons(tab, job.running);
+
+            let parts = [`目标 ${job.target}`];
+            if (job.resolved_ip && job.resolved_ip !== job.target) parts.push(`(${job.resolved_ip})`);
+            parts.push(job.source_ip ? `源 ${job.source_ip}` : '源 系统默认');
+            parts.push(job.running ? '运行中…' : '已结束');
+            let state = document.getElementById(tab + '-state');
+            state.textContent = parts.join(' · ');
+            state.className = 'text-xs ' + (job.running ? 'text-indigo-600' : 'text-gray-400');
+
+            let note = document.getElementById(tab + '-note');
+            if (job.error) {
+                note.className = 'px-6 py-3 border-b text-xs text-red-600';
+                note.textContent = job.error;
+            } else if (job.note) {
+                note.className = 'px-6 py-3 border-b text-xs text-gray-500';
+                note.textContent = job.note;
+            } else {
+                note.className = 'hidden';
+            }
+
+            if (tab === 'ping') renderPing(job); else renderTrace(job);
+        }
+
+        function renderPing(job) {
+            let s = job.summary || {};
+            document.getElementById('ping-stat-count').textContent = `${s.sent || 0} / ${s.received || 0}`;
+            document.getElementById('ping-stat-loss').textContent = s.sent ? (s.loss_percent || 0) + ' %' : '-';
+            document.getElementById('ping-stat-avg').textContent = s.received ? s.avg_ms + ' ms' : '-';
+            document.getElementById('ping-stat-range').textContent = s.received
+                ? `${s.min_ms} / ${s.max_ms} / ${s.stddev_ms} ms` : '-';
+
+            let tbody = document.getElementById('ping-body');
+            let probes = job.probes || [];
+            tbody.innerHTML = '';
+            if (!probes.length) {
+                tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-6 text-center text-gray-400">${job.running ? '正在探测…' : '没有结果'}</td></tr>`;
+                return;
+            }
+
+            probes.forEach(p => {
+                let [label, cls] = DIAG_STATUS[p.status] || [p.status, 'bg-gray-100 text-gray-600'];
+                let time = new Date(p.time);
+                let tr = document.createElement('tr');
+                tr.className = 'hover:bg-gray-50';
+                tr.innerHTML = `
+                    <td class="px-4 py-2 text-gray-500">${p.seq}</td>
+                    <td class="px-4 py-2 text-gray-800">${escapeHtml(p.from || '-')}</td>
+                    <td class="px-4 py-2">${badge(label, cls)} <span class="text-gray-400">${escapeHtml(p.detail || '')}</span></td>
+                    <td class="px-4 py-2 text-gray-500">${p.ttl || '-'}</td>
+                    <td class="px-4 py-2 text-gray-500">${isNaN(time.getTime()) ? '-' : time.toLocaleTimeString('zh-CN', {hour12: false})}</td>
+                    <td class="px-4 py-2 text-right ${p.status === 'ok' ? 'text-gray-700' : 'text-gray-400'}">${p.status === 'ok' ? p.rtt_ms + ' ms' : '-'}</td>`;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function renderTrace(job) {
+            let tbody = document.getElementById('trace-body');
+            let hops = job.hops || [];
+            tbody.innerHTML = '';
+            if (!hops.length) {
+                tbody.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-gray-400">${job.running ? '正在追踪…' : '没有结果'}</td></tr>`;
+                return;
+            }
+
+            hops.forEach(h => {
+                let nodes = h.nodes || [];
+                // 整跳没人回话就是一行 *，跟命令行的 traceroute 一个意思
+                let addr = nodes.length
+                    ? nodes.map(n => `<div class="font-mono text-gray-800">${escapeHtml(n.address)}${n.name ? `<span class="text-gray-400 font-sans"> (${escapeHtml(n.name)})</span>` : ''}</div>`).join('')
+                    : '<span class="text-gray-400 font-mono">*　无响应</span>';
+
+                let times = (h.probes || []).map(p => {
+                    if (p.status === 'ok') return `<span class="font-mono text-gray-700">${p.rtt_ms} ms</span>`;
+                    if (p.status === 'timeout') return '<span class="font-mono text-gray-400">*</span>';
+                    let [label] = DIAG_STATUS[p.status] || [p.status];
+                    return `<span class="font-mono text-red-500" title="${escapeHtml(p.detail || '')}">${escapeHtml(label)}</span>`;
+                }).join(' · ');
+
+                let best = (h.probes || []).filter(p => p.status === 'ok').map(p => p.rtt_ms);
+                let tr = document.createElement('tr');
+                tr.className = h.final ? 'bg-emerald-50/60' : 'hover:bg-gray-50';
+                tr.innerHTML = `
+                    <td class="px-4 py-2 text-gray-500 font-mono align-top">${h.ttl}${h.final ? badge('目标', 'bg-emerald-100 text-emerald-700 ml-1') : ''}</td>
+                    <td class="px-4 py-2 align-top">${addr}</td>
+                    <td class="px-4 py-2 align-top">${times}</td>
+                    <td class="px-4 py-2 text-right font-mono text-gray-500 align-top">${best.length ? Math.min(...best) + ' ms' : '-'}</td>`;
+                tbody.appendChild(tr);
+            });
+        }
+
         // Initial load
         let savedTab = null;
         try { savedTab = localStorage.getItem('lan-proxy-active-tab'); } catch (err) { /* 隐私模式下忽略 */ }
@@ -896,8 +2538,23 @@
         }, 2000);
 
         // 运行时长本地走秒，不额外发请求
+        setInterval(renderUptime, 1000);
+
+        // 停在网卡页时盯着 Wi-Fi 状态，换网后的自动切换结果能直接看到
         setInterval(() => {
-            if (activeTab === 'proxy') renderUptime();
+            if (activeTab === 'nic') loadWiFi();
+        }, 10000);
+
+        // DNS 页只刷统计和最近查询，不动正在编辑的配置输入框
+        setInterval(() => {
+            if (activeTab === 'dns') loadDNSStats();
+        }, 3000);
+
+        // 诊断在后台跑，停在该页且任务没结束时每秒取一次增量结果
+        setInterval(() => {
+            if ((activeTab === 'ping' || activeTab === 'trace') && diagState[activeTab].running) {
+                pollDiag(activeTab);
+            }
         }, 1000);
     </script>
 </body>

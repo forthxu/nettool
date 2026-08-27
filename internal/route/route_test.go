@@ -1,4 +1,4 @@
-package main
+package route
 
 import (
 	"strings"
@@ -34,22 +34,6 @@ func TestNormalizeDestination(t *testing.T) {
 		}
 		if got != c.want {
 			t.Errorf("normalizeDestination(%q) = %q, 期望 %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestIsValidDomain(t *testing.T) {
-	valid := []string{"example.com", "a.b.c.example.com", "xn--fiqs8s.cn", "my-host.example.com"}
-	invalid := []string{"example", "", "-bad.com", "bad-.com", "has space.com", "a..b", "with/slash.com", "semi;colon.com"}
-
-	for _, d := range valid {
-		if !isValidDomain(d) {
-			t.Errorf("isValidDomain(%q) = false, 期望 true", d)
-		}
-	}
-	for _, d := range invalid {
-		if isValidDomain(d) {
-			t.Errorf("isValidDomain(%q) = true, 期望 false", d)
 		}
 	}
 }
@@ -199,13 +183,13 @@ func TestParseLinuxRoutes(t *testing.T) {
 	if len(routes) != 3 {
 		t.Fatalf("解析到 %d 条, 期望 3 条 (default 与直连路由应被跳过): %+v", len(routes), routes)
 	}
-	if !kernelHasRoute(routes, "104.20.23.154/32", "192.168.10.249") {
+	if !KernelHasRoute(routes, "104.20.23.154/32", "192.168.10.249") {
 		t.Error("应识别出域名解析产生的 /32 主机路由")
 	}
-	if !kernelHasRoute(routes, "192.168.2.0/24", "192.168.1.254") {
+	if !KernelHasRoute(routes, "192.168.2.0/24", "192.168.1.254") {
 		t.Error("应识别出网段路由")
 	}
-	if kernelHasRoute(routes, "192.168.2.0/24", "192.168.10.249") {
+	if KernelHasRoute(routes, "192.168.2.0/24", "192.168.10.249") {
 		t.Error("网关不一致时不应判定为同一条路由")
 	}
 
@@ -235,10 +219,10 @@ default            192.168.10.1       UGScg                 en0
 172.20.0/23       link#27            UC              bridge100      !`
 
 	routes := parseDarwinRoutes(out)
-	if !kernelHasRoute(routes, "192.168.2.0/24", "192.168.10.249") {
+	if !KernelHasRoute(routes, "192.168.2.0/24", "192.168.10.249") {
 		t.Error("应识别出 BSD 缩写形式的网段路由 192.168.2 -> 192.168.2.0/24")
 	}
-	if !kernelHasRoute(routes, "104.20.23.154/32", "192.168.10.249") {
+	if !KernelHasRoute(routes, "104.20.23.154/32", "192.168.10.249") {
 		t.Error("应识别出主机路由")
 	}
 	for _, r := range routes {
@@ -248,5 +232,33 @@ default            192.168.10.1       UGScg                 en0
 		if !strings.Contains(r.Gateway, ".") {
 			t.Errorf("直连表项 (link#N) 不应被解析为路由: %+v", r)
 		}
+	}
+}
+
+// macOS 上路由的作用域网卡是添加那一刻算出来存进台账的，网关后来换了网卡
+// （比如 Wi-Fi 也把它设成默认网关）旧作用域就会变成黑洞，得能认出来并重下发。
+func TestRescopeTarget(t *testing.T) {
+	cases := []struct {
+		name      string
+		current   string
+		want      string
+		wantIface string
+		wantNeed  bool
+	}{
+		{name: "没变化不用动", current: "en0", want: "en0", wantIface: "en0", wantNeed: false},
+		{name: "网关换到了另一块网卡", current: "en0", want: "en7", wantIface: "en7", wantNeed: true},
+		{name: "老台账没记作用域，补上", current: "", want: "en0", wantIface: "en0", wantNeed: true},
+		{name: "网关暂时够不着就别动", current: "en0", want: "", wantIface: "en0", wantNeed: false},
+		{name: "两边都没有也不动", current: "", want: "", wantIface: "", wantNeed: false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			iface, need := rescopeTarget(c.current, c.want)
+			if iface != c.wantIface || need != c.wantNeed {
+				t.Errorf("rescopeTarget(%q, %q) = (%q, %v), 期望 (%q, %v)",
+					c.current, c.want, iface, need, c.wantIface, c.wantNeed)
+			}
+		})
 	}
 }

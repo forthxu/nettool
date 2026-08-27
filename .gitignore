@@ -2,10 +2,12 @@
 /build/
 lan_proxy
 lanproxy
+lan_router_socks5
 *.exe
 
-# 运行时生成的路由台账
+# 运行时生成的路由台账与 Wi-Fi 配置档
 routes.json
+net-profiles.json
 
 # 编辑器 / 系统杂项
 .DS_Store

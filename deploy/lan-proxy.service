@@ -6,7 +6,9 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/usr/local/bin
-ExecStart=/usr/local/bin/lan_proxy -socks-port 1080 -start-proxy -api-port 8080 -user admin -pass your_secure_password
+# 代理与 DNS 的开关状态存在配置文件里，重启后按上次退出前的状态恢复；
+# 想不管上次状态、每次都把代理拉起来，再加上 -start-proxy（DNS 则是 -start-dns）
+ExecStart=/usr/local/bin/lan_proxy -socks-port 1080 -api-port 8080 -user admin -pass your_secure_password
 Restart=always
 RestartSec=5
 
