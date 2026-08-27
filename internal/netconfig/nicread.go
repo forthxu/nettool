@@ -293,7 +293,16 @@ func splitNmcli(line string) []string {
 	return fields
 }
 
+// linuxNICs 按当前系统装的是哪套工具分流：桌面/服务器发行版走 NetworkManager，
+// OpenWrt 之类没有 nmcli 的走 UCI。
 func linuxNICs() ([]NIC, error) {
+	if linuxBackend() == "uci" {
+		return uciNICs()
+	}
+	return nmcliNICs()
+}
+
+func nmcliNICs() ([]NIC, error) {
 	out, err := exec.Command("nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("读取网卡列表失败（本功能依赖 NetworkManager 的 nmcli）: %s", strings.TrimSpace(string(out)))

@@ -204,8 +204,18 @@ func sameSettings(cur NIC, want Settings) bool {
 // 下发
 // ---------------------------------------------------------
 
-// buildApplyCmds 返回要依次执行的命令。地址与 DNS 在三个平台上都是分开设置的，
+// applyPlatform 返回当前该按哪套工具下发。Linux 上有两套（NetworkManager 与
+// OpenWrt 的 UCI），所以不能直接拿 runtime.GOOS 当键。
+func applyPlatform() string {
+	if runtime.GOOS == "linux" && linuxBackend() == "uci" {
+		return "linux-uci"
+	}
+	return runtime.GOOS
+}
+
+// buildApplyCmds 返回要依次执行的命令。地址与 DNS 在各平台上都是分开设置的，
 // 所以这里返回的是一个命令序列而不是单条命令。拆成纯函数是为了能被测试覆盖。
+// osName 取自 applyPlatform，除了 GOOS 还可能是 linux-uci。
 func buildApplyCmds(osName string, t Target, s Settings) ([][]string, error) {
 	if strings.TrimSpace(t.Service) == "" {
 		return nil, fmt.Errorf("未指定要配置的网络服务/网卡")
@@ -254,6 +264,13 @@ func buildApplyCmds(osName string, t Target, s Settings) ([][]string, error) {
 		// 改完要 up 一次才生效
 		return [][]string{args, {"nmcli", "connection", "up", t.Service}}, nil
 
+	case "linux-uci":
+		script, err := buildUCIApplyScript(t.Service, s)
+		if err != nil {
+			return nil, err
+		}
+		return [][]string{{"sh", "-c", script}}, nil
+
 	case "windows":
 		name := "name=" + t.Service
 		var cmds [][]string
@@ -283,7 +300,7 @@ func buildApplyCmds(osName string, t Target, s Settings) ([][]string, error) {
 // Apply 真正下发配置。改网卡配置随时可能把当前这条管理连接一起切断，
 // 所以每条命令都记日志，失败时把系统原始输出带回去。
 func Apply(t Target, s Settings) error {
-	cmds, err := buildApplyCmds(runtime.GOOS, t, s)
+	cmds, err := buildApplyCmds(applyPlatform(), t, s)
 	if err != nil {
 		return err
 	}

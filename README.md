@@ -100,8 +100,9 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 ### 网卡配置（IP / 掩码 / 网关 / DNS）
 
 - 「网卡配置」页列出本机每张网卡的配置入口、当前方式（DHCP / 手动）、IP、掩码、网关、手工 DNS，并可直接改成 DHCP 或手动指定。
-- 各平台的写入方式：macOS `networksetup`（以「网络服务」为单位，一块网卡可能对应多个服务）、Linux `nmcli`（以 NetworkManager 连接为单位，改完自动 `connection up`）、Windows `netsh`。掩码可填 `255.255.255.0` 或 `24`，会按平台自动换算（nmcli 用 `ip/prefix`）。
-- 下发前校验：IP / 网关 / DNS 必须是合法 IPv4，网关必须与 IP 同网段（否则配下去必然不通），掩码必须连续。命令拼装由 `internal/netconfig` 的单元测试覆盖三个平台。
+- 各平台的写入方式：macOS `networksetup`（以「网络服务」为单位，一块网卡可能对应多个服务）、Linux `nmcli`（以 NetworkManager 连接为单位，改完自动 `connection up`）、OpenWrt `uci`（以 interface 段为单位，`uci commit` + `/etc/init.d/network reload`）、Windows `netsh`。掩码可填 `255.255.255.0` 或 `24`，会按平台自动换算（nmcli 用 `ip/prefix`）。
+- **Linux 上有两套后端**：装了 `nmcli` 就用 NetworkManager，没有则回落到 UCI（OpenWrt 上没有 NetworkManager，这条路本来是断的）。读和写用同一个判断，不会出现「从 UCI 读、往 nmcli 写」。UCI 那一组改动整段交给 `sh` 一次执行，中途失败不会留下半套配置；段名会做严格校验，挡住往脚本里注入。
+- 下发前校验：IP / 网关 / DNS 必须是合法 IPv4，网关必须与 IP 同网段（否则配下去必然不通），掩码必须连续。命令拼装由 `internal/netconfig` 的单元测试覆盖四套后端。
 - ⚠️ 修改网卡配置需要 root，且会让该网卡短暂断线；如果 Web 后台正是经由这张网卡访问的，页面会断开。界面上有二次确认。
 - 接口：`GET /api/net/interfaces`、`POST /api/net/apply {service, device, method, ip, mask, gateway, dns[]}`。
 
@@ -199,6 +200,7 @@ nettool/
 │   ├── netconfig/    # 网卡配置与 Wi-Fi 自动切换
 │   │   ├── nic.go        # 配置模型、校验、下发命令拼装
 │   │   ├── nicread.go    # 读取三平台的当前网卡配置
+│   │   ├── nicuci.go     # OpenWrt 后端：ubus 读、uci 写
 │   │   ├── wifi.go       # 当前 SSID / 网络指纹识别
 │   │   ├── profile.go    # Wi-Fi 配置档存取
 │   │   └── watcher.go    # 按 SSID 自动切换
@@ -326,6 +328,8 @@ sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_passw
    /etc/init.d/nettool start
    ```
 
+> 网卡配置页在 OpenWrt 上走 UCI 后端：配置对象是 `/etc/config/network` 里的 interface 段名（`lan` / `wan` / `wwan`），下发相当于 `uci set` + `uci commit network` + `/etc/init.d/network reload`。`proto` 是 `pppoe` 等本程序改不了的类型时只读不写。
+
 ---
 
 ## 测试
@@ -374,7 +378,7 @@ curl -s 'http://127.0.0.1:8090/api/diag/job?kind=traceroute'
 
 ### 单元测试
 
-含 DNS 转发/缓存/分流的端到端用例、三平台命令拼装、ICMP 回包匹配等：
+含 DNS 转发/缓存/分流的端到端用例、各平台命令拼装（networksetup / nmcli / uci / netsh）、ICMP 回包匹配等：
 
 ```bash
 go test -race ./...

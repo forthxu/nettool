@@ -136,6 +136,13 @@ func currentSSID() (ssid string, source string, err error) {
 		return id.SSID, id.Source, id.Err
 
 	case "linux":
+		if linuxBackend() == "uci" {
+			ssid, e := uciCurrentSSID()
+			if e != nil {
+				return "", "", e
+			}
+			return ssid, "iwinfo", nil
+		}
 		out, e := exec.Command("nmcli", "-t", "-f", "ACTIVE,SSID", "device", "wifi").CombinedOutput()
 		if e != nil {
 			return "", "", fmt.Errorf("读取 SSID 失败: %s", strings.TrimSpace(string(out)))

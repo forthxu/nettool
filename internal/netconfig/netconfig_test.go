@@ -355,6 +355,151 @@ Configuration for interface "WLAN"
 	}
 }
 
+// UCI 那一整组改动交给 sh 一次执行：逐条跑的话，删除一个不存在的选项会返回非零，
+// 会被当成失败而中断，留下半套配置。
+func TestBuildNICApplyCmdsUCI(t *testing.T) {
+	cmds, err := buildApplyCmds("linux-uci", Target{Device: "br-lan", Service: "lan"}, Settings{Method: "dhcp"})
+	if err != nil {
+		t.Fatalf("意外报错: %v", err)
+	}
+	if len(cmds) != 1 || cmds[0][0] != "sh" || cmds[0][1] != "-c" {
+		t.Fatalf("应只有一条 sh -c 命令: %v", cmds)
+	}
+	if !strings.Contains(cmds[0][2], "uci set network.lan.proto='dhcp'") {
+		t.Errorf("脚本内容不对: %s", cmds[0][2])
+	}
+
+	if _, err := buildApplyCmds("linux-uci", Target{Service: "lan;reboot"}, Settings{Method: "dhcp"}); err == nil {
+		t.Error("非法段名应在拼命令时就被挡下")
+	}
+}
+
+func TestParseUbusNetworkDump(t *testing.T) {
+	out := `{"interface":[
+	  {"interface":"loopback","up":true,"proto":"static","l3_device":"lo",
+	   "ipv4-address":[{"address":"127.0.0.1","mask":8}]},
+	  {"interface":"lan","up":true,"proto":"static","device":"br-lan","l3_device":"br-lan",
+	   "ipv4-address":[{"address":"192.168.1.1","mask":24}],
+	   "route":[{"target":"192.168.9.0","mask":24,"nexthop":"192.168.1.9"}],
+	   "dns-server":["8.8.8.8","1.1.1.1"]},
+	  {"interface":"wan","up":true,"proto":"dhcp","l3_device":"eth0.2",
+	   "ipv4-address":[{"address":"10.0.0.5","mask":16}],
+	   "route":[{"target":"0.0.0.0","mask":0,"nexthop":"10.0.0.1"}],
+	   "dns-server":["223.5.5.5"]},
+	  {"interface":"wwan","up":false,"proto":"dhcp","l3_device":"apcli0","ipv4-address":[]}
+	]}`
+
+	list, err := parseUbusNetworkDump(out)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("应解析出 3 个接口（loopback 要跳过），得到 %d: %+v", len(list), list)
+	}
+
+	lan := list[0]
+	if lan.Service != "lan" || lan.Device != "br-lan" || lan.Type != "ethernet" ||
+		lan.Method != "manual" || lan.IP != "192.168.1.1" || lan.Mask != "255.255.255.0" {
+		t.Errorf("lan 解析有误: %+v", lan)
+	}
+	if lan.Gateway != "" {
+		t.Errorf("只有非默认路由时不应认成网关: %+v", lan)
+	}
+	if len(lan.DNS) != 2 || lan.DNS[1] != "1.1.1.1" {
+		t.Errorf("DNS 解析有误: %v", lan.DNS)
+	}
+
+	wan := list[1]
+	if wan.Method != "dhcp" || wan.Gateway != "10.0.0.1" || wan.Mask != "255.255.0.0" || !wan.Active {
+		t.Errorf("wan 解析有误: %+v", wan)
+	}
+
+	wwan := list[2]
+	if wwan.Type != "wifi" || wwan.Active || wwan.IP != "" {
+		t.Errorf("没拿到地址的无线接口解析有误: %+v", wwan)
+	}
+}
+
+func TestBuildUCIApplyScript(t *testing.T) {
+	manual, err := buildUCIApplyScript("lan", Settings{
+		Method: "manual", IP: "192.168.1.20", Mask: "255.255.255.0",
+		Gateway: "192.168.1.1", DNS: []string{"8.8.8.8", "1.1.1.1"},
+	})
+	if err != nil {
+		t.Fatalf("意外报错: %v", err)
+	}
+	for _, want := range []string{
+		"uci set network.lan.proto='static'",
+		"uci set network.lan.ipaddr='192.168.1.20'",
+		"uci set network.lan.netmask='255.255.255.0'",
+		"uci set network.lan.gateway='192.168.1.1'",
+		"uci add_list network.lan.dns='8.8.8.8'",
+		"uci add_list network.lan.dns='1.1.1.1'",
+		"uci set network.lan.peerdns='0'", // 显式 DNS 要盖掉上游下发的
+		"uci commit network",
+		"/etc/init.d/network reload",
+	} {
+		if !strings.Contains(manual, want) {
+			t.Errorf("脚本里缺少 %q:\n%s", want, manual)
+		}
+	}
+	// 删除已有的 dns 列表必须排在 add_list 前面，否则会越加越多
+	if strings.Index(manual, "uci -q delete network.lan.dns") > strings.Index(manual, "add_list") {
+		t.Errorf("应先清空 dns 再 add_list:\n%s", manual)
+	}
+
+	dhcp, err := buildUCIApplyScript("wan", Settings{Method: "dhcp"})
+	if err != nil {
+		t.Fatalf("意外报错: %v", err)
+	}
+	for _, want := range []string{
+		"uci set network.wan.proto='dhcp'",
+		"uci -q delete network.wan.ipaddr || true",
+		"uci -q delete network.wan.gateway || true",
+		"uci set network.wan.peerdns='1'", // 不指定 DNS 就跟随上游
+	} {
+		if !strings.Contains(dhcp, want) {
+			t.Errorf("脚本里缺少 %q:\n%s", want, dhcp)
+		}
+	}
+	if strings.Contains(dhcp, "ipaddr='") {
+		t.Errorf("DHCP 下不应再设静态地址:\n%s", dhcp)
+	}
+}
+
+// 段名会拼进 shell 脚本，必须挡住注入
+func TestUCINameRejectsInjection(t *testing.T) {
+	bad := []string{"", "lan;rm -rf /", "lan'", "lan$(id)", "网络", "lan lan", "../etc"}
+	for _, name := range bad {
+		if validUCIName(name) {
+			t.Errorf("validUCIName(%q) = true, 期望 false", name)
+		}
+		if _, err := buildUCIApplyScript(name, Settings{Method: "dhcp"}); err == nil {
+			t.Errorf("buildUCIApplyScript(%q) 期望报错", name)
+		}
+	}
+	for _, name := range []string{"lan", "wan6", "my_iface", "WAN2"} {
+		if !validUCIName(name) {
+			t.Errorf("validUCIName(%q) = false, 期望 true", name)
+		}
+	}
+}
+
+func TestParseIwinfoSSID(t *testing.T) {
+	out := `wlan0     ESSID: unknown
+          Access Point: 00:00:00:00:00:00
+apcli0    ESSID: "MyHomeNet"
+          Access Point: AA:BB:CC:DD:EE:FF
+          Mode: Client  Channel: 6`
+
+	if got := parseIwinfoSSID(out); got != "MyHomeNet" {
+		t.Errorf("= %q, 期望 MyHomeNet（要跳过 unknown 的 AP 接口）", got)
+	}
+	if got := parseIwinfoSSID("wlan0     ESSID: unknown"); got != "" {
+		t.Errorf("没关联时应返回空串, 得到 %q", got)
+	}
+}
+
 func TestSameSettings(t *testing.T) {
 	cur := NIC{Method: "manual", IP: "192.168.1.20", Mask: "255.255.255.0", Gateway: "192.168.1.1", DNS: []string{"8.8.8.8"}}
 	want := Settings{Method: "manual", IP: "192.168.1.20", Mask: "255.255.255.0", Gateway: "192.168.1.1", DNS: []string{"8.8.8.8"}}
