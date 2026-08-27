@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"lan_router_socks5/internal/netutil"
-	"lan_router_socks5/internal/route"
+	"nettool/internal/netutil"
+	"nettool/internal/route"
 )
 
 // SwitchRecord 是最近一次切换的结果，给界面看的

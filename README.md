@@ -1,4 +1,4 @@
-# 网络管理工具（LAN Multi-Router Toolbox）
+# nettool（网络管理工具）
 
 一台机器同时接了多个路由器 / 多条宽带时，用它把「哪些流量走哪条线」管起来，并顺手把 DNS、网卡配置和连通性排查一起做了。
 Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌的 Web 后台完成，也都有对应的 RESTful 接口。
@@ -87,7 +87,7 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 解决「哪些是本程序改的」这个问题：
 
 - 每次增删都写入 JSON 台账，记录 `destination / gateway / domain / resolved_at / created_at`；先写临时文件再原子替换。
-- 路径由 `-state-file` 指定，留空则依次尝试 `/var/lib/lan-proxy/routes.json` → `~/.lan-proxy/routes.json` → 当前目录，全部不可写则本次运行不持久化（并明确告警）。
+- 路径由 `-state-file` 指定，留空则依次尝试 `/var/lib/nettool/routes.json` → `~/.nettool/routes.json` → 当前目录，全部不可写则本次运行不持久化（并明确告警）。
 - 启动时读台账并与内核路由表逐条比对，日志与界面标出每条是「生效中 / 已失效 / 状态未知」；机器重启导致路由丢失时，可在界面点「重新下发失效路由」（`POST /api/routes/restore`，同时会纠正作用域并在响应里返回 `rescoped`），或用 `-restore-routes` 启动参数自动重建。
 - **作用域自动纠偏（macOS）**：`-ifscope` 的作用域网卡是添加那一刻按「网关挂在哪块网卡上」算出来存进台账的。网关后来换了网卡（典型：把 Wi-Fi 的默认网关也设成同一个路由器，系统就把它的邻居项挪到了 Wi-Fi 上），旧作用域里再也解析不到网关，这条路由会变成**黑洞**——内核里看着还在（状态显示「生效中」），走它的流量却发不出去。所以在启动对账、每轮域名刷新、以及 Wi-Fi 配置档切换完 5 秒后，都会比一遍作用域，不一致就按新网卡撤旧下新；网关当前哪块网卡都够不着时不动它（可能只是网线拔了），下一轮再说。下发失败不写台账，下轮自动重试。界面每条路由会显示当前作用域网卡。
 - Linux 上下发时额外打 `proto 210` 标记，即使台账丢失也能用 `ip route show proto 210` 认出本程序加的路由；界面会把「内核有标记但台账没有」的列为孤儿路由。busybox 的 `ip` 不认 `proto` 时会自动去掉标记重试。
@@ -173,7 +173,7 @@ ICMP 套接字有两条路：非特权的 ICMP 数据报套接字与需要 root 
 按业务分包，`main.go` 只做命令行参数解析与装配，各业务互不依赖对方的内部实现。
 
 ```text
-lan_router_socks5/
+nettool/
 ├── go.mod            # Go 模块配置文件
 ├── main.go           # 入口：解析参数 → 装配各业务 → 起 Web 服务
 ├── internal/
@@ -218,8 +218,8 @@ lan_router_socks5/
 │       └── diag.go       # /api/diag/*
 ├── Makefile          # 多平台一键编译脚本
 ├── deploy/
-│   ├── lan-proxy.service  # Linux Systemd 服务模板
-│   └── lan-proxy.init     # OpenWrt Procd 初始化脚本模板
+│   ├── nettool.service  # Linux Systemd 服务模板
+│   └── nettool.init     # OpenWrt Procd 初始化脚本模板
 ├── static/
 │   └── index.html    # 嵌入式响应式 Web 管理前端（六个页签）
 └── README.md         # 项目说明文档
@@ -247,12 +247,12 @@ make all-platforms
 ## 运行与参数
 
 ```bash
-sudo ./lan_proxy -socks-port 1080 -api-port 8080 -user admin -pass my_secure_password
+sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_password
 ```
 
 **代理**
 
-- `-socks-port`: SOCKS5 代理监听端口（留空沿用配置文件里的值，默认 `1080`）
+- `-socks-port`: SOCKS5 代理监听端口（留空沿用配置文件里的值，默认 `8091`）
 - `-start-proxy`: 启动时**无条件**开启 SOCKS5 代理；不加则按上次退出前的开关状态恢复（第一次运行为不启动，在 Web 后台点「启动代理」）
 - `-outbound-ip`: SOCKS5 代理外发流量绑定的本地网卡 IP（留空沿用配置文件里的值）
 - `-dns`: 代理解析域名用的上游 DNS（如 `8.8.8.8`），查询从 `-outbound-ip` 绑定的地址发出；留空沿用配置文件里的值，要改回系统 DNS 在 Web 后台清空即可
@@ -260,7 +260,7 @@ sudo ./lan_proxy -socks-port 1080 -api-port 8080 -user admin -pass my_secure_pas
 
 **Web 后台**
 
-- `-api-port`: Web 管理后台与 API 端口（默认 `8080`）
+- `-api-port`: Web 管理后台与 API 端口（默认 `8090`）
 - `-user` / `-pass`: Web 控制台登录用户名与密码（留空则不启用认证）
 
 **路由**
@@ -292,38 +292,38 @@ sudo ./lan_proxy -socks-port 1080 -api-port 8080 -user admin -pass my_secure_pas
 
 1. 将编译好的二进制文件复制到 `/usr/local/bin/`：
    ```bash
-   sudo cp build/lan_proxy-linux-amd64 /usr/local/bin/lan_proxy
-   sudo chmod +x /usr/local/bin/lan_proxy
+   sudo cp build/nettool-linux-amd64 /usr/local/bin/nettool
+   sudo chmod +x /usr/local/bin/nettool
    ```
-2. 将 `deploy/lan-proxy.service` 复制到 `/etc/systemd/system/`：
+2. 将 `deploy/nettool.service` 复制到 `/etc/systemd/system/`：
    ```bash
-   sudo cp deploy/lan-proxy.service /etc/systemd/system/
+   sudo cp deploy/nettool.service /etc/systemd/system/
    ```
 3. 修改服务文件中的密码及参数（如需）：
    ```bash
-   sudo nano /etc/systemd/system/lan-proxy.service
+   sudo nano /etc/systemd/system/nettool.service
    ```
 4. 启动并设置开机自启：
    ```bash
    sudo systemctl daemon-reload
-   sudo systemctl enable --now lan-proxy
-   sudo systemctl status lan-proxy
+   sudo systemctl enable --now nettool
+   sudo systemctl status nettool
    ```
 
 ### OpenWrt 路由器
 
-1. 将对应架构的二进制文件（如 `lan_proxy-router-mipsle`）通过 SCP 上传至路由器 `/usr/bin/lan_proxy`，并赋予执行权限：
+1. 将对应架构的二进制文件（如 `nettool-router-mipsle`）通过 SCP 上传至路由器 `/usr/bin/nettool`，并赋予执行权限：
    ```bash
-   chmod +x /usr/bin/lan_proxy
+   chmod +x /usr/bin/nettool
    ```
-2. 将 `deploy/lan-proxy.init` 复制到路由器 `/etc/init.d/lan_proxy`：
+2. 将 `deploy/nettool.init` 复制到路由器 `/etc/init.d/nettool`：
    ```bash
-   chmod +x /etc/init.d/lan_proxy
+   chmod +x /etc/init.d/nettool
    ```
 3. 启停与开机自启配置：
    ```bash
-   /etc/init.d/lan_proxy enable
-   /etc/init.d/lan_proxy start
+   /etc/init.d/nettool enable
+   /etc/init.d/nettool start
    ```
 
 ---
@@ -344,14 +344,14 @@ curl 'https://myip.ipip.net/' -x socks5://127.0.0.1:8091
 
 ```bash
 # 先不占用 53，用 5353 起来验证（配好上游后在后台点「启动 DNS」，或加 -start-dns）
-sudo ./lan_proxy -dns-port 5353 -dns-upstream '223.5.5.5,https://doh.pub/dns-query' -start-dns
+sudo ./nettool -dns-port 5353 -dns-upstream '223.5.5.5,https://doh.pub/dns-query' -start-dns
 
 dig +short @127.0.0.1 -p 5353 www.baidu.com A     # UDP
 dig +tcp +short @127.0.0.1 -p 5353 example.com A  # TCP
 # 第二次同样的查询应当直接命中缓存（后台「最近查询」里来源显示「缓存」，TTL 会随时间递减）
 
 # 不启动服务也能测某个上游通不通
-curl -s -X POST http://127.0.0.1:8080/api/dns/query \
+curl -s -X POST http://127.0.0.1:8090/api/dns/query \
   -H 'Content-Type: application/json' \
   -d '{"name":"www.example.com","type":"A","upstream":"腾讯DoH"}'
 ```
@@ -360,16 +360,16 @@ curl -s -X POST http://127.0.0.1:8080/api/dns/query \
 
 ```bash
 # 从指定网卡 IP ping，起完任务用返回的 id 取结果
-curl -s -X POST http://127.0.0.1:8080/api/diag/ping \
+curl -s -X POST http://127.0.0.1:8090/api/diag/ping \
   -H 'Content-Type: application/json' \
   -d '{"target":"1.1.1.1","source_ip":"192.168.1.10","count":4}'
-curl -s 'http://127.0.0.1:8080/api/diag/job?kind=ping'
+curl -s 'http://127.0.0.1:8090/api/diag/job?kind=ping'
 
 # traceroute（Linux 需要 root）
-curl -s -X POST http://127.0.0.1:8080/api/diag/traceroute \
+curl -s -X POST http://127.0.0.1:8090/api/diag/traceroute \
   -H 'Content-Type: application/json' \
   -d '{"target":"8.8.8.8","max_hops":30,"probes":3,"resolve_names":true}'
-curl -s 'http://127.0.0.1:8080/api/diag/job?kind=traceroute'
+curl -s 'http://127.0.0.1:8090/api/diag/job?kind=traceroute'
 ```
 
 ### 单元测试

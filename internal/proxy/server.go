@@ -12,7 +12,7 @@ import (
 
 	"github.com/armon/go-socks5"
 
-	"lan_router_socks5/internal/netiface"
+	"nettool/internal/netiface"
 )
 
 // Server 是一个可反复启停的 SOCKS5 服务。改配置时若正在运行会带新配置重启。
@@ -29,7 +29,7 @@ type Server struct {
 
 // Default 是本进程唯一的代理实例
 var Default = &Server{
-	port:       "1080",
+	port:       "8091",
 	outboundIP: "",
 }
 

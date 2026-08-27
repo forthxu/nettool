@@ -1,4 +1,4 @@
-module lan_router_socks5
+module nettool
 
 go 1.22
 

@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"strings"
 
-	"lan_router_socks5/internal/netiface"
+	"nettool/internal/netiface"
 )
 
 // linuxRouteProto 是自定义路由协议号，用于标记"本程序下发"，

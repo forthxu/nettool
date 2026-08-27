@@ -4,13 +4,13 @@ START=99
 STOP=10
 
 USE_PROCD=1
-PROG="/usr/bin/lan_proxy"
+PROG="/usr/bin/nettool"
 
 start_service() {
     procd_open_instance
     # 代理与 DNS 的开关状态存在配置文件里，重启后按上次退出前的状态恢复；
     # 想不管上次状态、每次都把代理拉起来，再加上 -start-proxy（DNS 则是 -start-dns）
-    procd_set_param command "$PROG" -socks-port "1080" -api-port "8080" -user "admin" -pass "your_secure_password"
+    procd_set_param command "$PROG" -socks-port "8091" -api-port "8090" -user "admin" -pass "your_secure_password"
     procd_set_param respawn 3600 5 0
     procd_set_param stdout 1
     procd_set_param stderr 1

@@ -15,8 +15,8 @@ import (
 
 	"golang.org/x/net/proxy"
 
-	"lan_router_socks5/internal/netiface"
-	proxysrv "lan_router_socks5/internal/proxy"
+	"nettool/internal/netiface"
+	proxysrv "nettool/internal/proxy"
 )
 
 // processStartedAt 是进程本身的启动时间，代理重启不影响它

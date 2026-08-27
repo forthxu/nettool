@@ -12,7 +12,7 @@ import (
 	"sort"
 	"time"
 
-	"lan_router_socks5/internal/netutil"
+	"nettool/internal/netutil"
 )
 
 const stateVersion = 1
@@ -45,11 +45,11 @@ func pickStateFile(flagVal string) string {
 		return flagVal
 	}
 
-	candidates := []string{filepath.Join("/var/lib/lan-proxy", "routes.json")}
+	candidates := []string{filepath.Join("/var/lib/nettool", "routes.json")}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		candidates = append(candidates, filepath.Join(home, ".lan-proxy", "routes.json"))
+		candidates = append(candidates, filepath.Join(home, ".nettool", "routes.json"))
 	}
-	candidates = append(candidates, "lan-proxy-routes.json")
+	candidates = append(candidates, "nettool-routes.json")
 
 	for _, c := range candidates {
 		if err := netutil.EnsureStateDir(c); err == nil {

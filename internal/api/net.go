@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"lan_router_socks5/internal/netconfig"
+	"nettool/internal/netconfig"
 )
 
 func handleNetInterfaces(w http.ResponseWriter, r *http.Request) {

@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/net/dns/dnsmessage"
 
-	"lan_router_socks5/internal/netutil"
+	"nettool/internal/netutil"
 )
 
 // Server 是一个可反复启停的本地 DNS 服务。配置与运行状态分开：

@@ -1,6 +1,6 @@
-# Makefile for LAN Router & SOCKS5 Proxy Manager
+# Makefile for nettool（网络管理工具）
 
-BINARY_NAME=lan_proxy
+BINARY_NAME=nettool
 VERSION=1.0.0
 BUILD_DIR=build
 

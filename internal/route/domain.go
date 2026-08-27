@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"lan_router_socks5/internal/netutil"
+	"nettool/internal/netutil"
 )
 
 // RefreshDomain 重新解析域名并让内核路由与最新的 A 记录对齐。

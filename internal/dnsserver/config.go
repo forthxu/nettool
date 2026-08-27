@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"lan_router_socks5/internal/netutil"
+	"nettool/internal/netutil"
 )
 
 type configFile struct {

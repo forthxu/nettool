@@ -75,7 +75,7 @@
                         </div>
                         <div>
                             <label class="block text-xs text-gray-500 mb-1">监听端口</label>
-                            <input type="number" id="new-socks-port" value="1080" oninput="syncEgressCommand()" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <input type="number" id="new-socks-port" value="8091" oninput="syncEgressCommand()" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
                         </div>
                         <div>
                             <div class="flex justify-between items-center mb-1">
@@ -106,7 +106,7 @@
                             <div id="egress-detail" class="text-xs text-gray-400 mt-1 leading-relaxed whitespace-pre-line"></div>
                             <div class="mt-2 text-xs text-gray-400">
                                 等价命令：
-                                <code id="egress-command" class="block mt-1 px-2 py-1.5 bg-gray-50 border rounded text-gray-600 font-mono break-all cursor-pointer" onclick="copyEgressCommand()" title="点击复制">curl --socks5-hostname 127.0.0.1:1080 'https://myip.ipip.net/'</code>
+                                <code id="egress-command" class="block mt-1 px-2 py-1.5 bg-gray-50 border rounded text-gray-600 font-mono break-all cursor-pointer" onclick="copyEgressCommand()" title="点击复制">curl --socks5-hostname 127.0.0.1:8091 'https://myip.ipip.net/'</code>
                             </div>
                         </div>
                     </div>
@@ -831,7 +831,7 @@
                 btn.classList.add(...(isActive ? ACTIVE_TAB_CLASSES : INACTIVE_TAB_CLASSES));
             });
 
-            try { localStorage.setItem('lan-proxy-active-tab', name); } catch (err) { /* 隐私模式下忽略 */ }
+            try { localStorage.setItem('nettool-active-tab', name); } catch (err) { /* 隐私模式下忽略 */ }
 
             // 路由数据只在首次进入该标签页时拉取，之后靠刷新按钮
             if (name === 'routes' && !routesTabLoaded) {
@@ -1035,7 +1035,7 @@
         }
 
         function syncEgressCommand() {
-            let port = document.getElementById('new-socks-port').value.trim() || '1080';
+            let port = document.getElementById('new-socks-port').value.trim() || '8091';
             document.getElementById('egress-command').textContent =
                 `curl --socks5-hostname 127.0.0.1:${port} 'https://myip.ipip.net/'`;
         }
@@ -2528,7 +2528,7 @@
 
         // Initial load
         let savedTab = null;
-        try { savedTab = localStorage.getItem('lan-proxy-active-tab'); } catch (err) { /* 隐私模式下忽略 */ }
+        try { savedTab = localStorage.getItem('nettool-active-tab'); } catch (err) { /* 隐私模式下忽略 */ }
         switchTab(TABS.includes(savedTab) ? savedTab : 'proxy');
         loadStatus();
 

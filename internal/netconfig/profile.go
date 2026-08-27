@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"lan_router_socks5/internal/netutil"
+	"nettool/internal/netutil"
 )
 
 const profileVersion = 1

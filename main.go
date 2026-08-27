@@ -1,4 +1,4 @@
-// 命令 lan_proxy 是一个局域网网络管理工具：SOCKS5 代理 + 多路由器网关调度 +
+// 命令 nettool 是一个局域网网络管理工具：SOCKS5 代理 + 多路由器网关调度 +
 // 本地 DNS 服务 + 网卡配置管理 + 连通性诊断，全部通过内嵌的 Web 后台操作。
 //
 // 各业务分别在 internal/ 下：
@@ -23,11 +23,11 @@ import (
 	"net/http"
 	"time"
 
-	"lan_router_socks5/internal/api"
-	"lan_router_socks5/internal/dnsserver"
-	"lan_router_socks5/internal/netconfig"
-	"lan_router_socks5/internal/proxy"
-	"lan_router_socks5/internal/route"
+	"nettool/internal/api"
+	"nettool/internal/dnsserver"
+	"nettool/internal/netconfig"
+	"nettool/internal/proxy"
+	"nettool/internal/route"
 )
 
 //go:embed static/*
@@ -58,14 +58,14 @@ type options struct {
 
 func parseFlags() options {
 	o := options{
-		socksPort:       flag.String("socks-port", "", "SOCKS5 代理端口（留空沿用上次保存的值，默认 1080）"),
+		socksPort:       flag.String("socks-port", "", "SOCKS5 代理端口（留空沿用上次保存的值，默认 8091）"),
 		outboundIP:      flag.String("outbound-ip", "", "SOCKS5 外发流量绑定的本机 IP（留空沿用上次保存的值）"),
 		proxyDNS:        flag.String("dns", "", "代理解析域名用的上游 DNS（如 8.8.8.8 或 8.8.8.8:53），留空沿用上次保存的值"),
 		proxyConfigFile: flag.String("proxy-config-file", "", "SOCKS5 代理配置文件路径（留空则与路由台账同目录）"),
-		apiPort:         flag.String("api-port", "8080", "API management and Web UI port"),
+		apiPort:         flag.String("api-port", "8090", "API management and Web UI port"),
 		authUser:        flag.String("user", "", "Web UI & API username (leave empty for no auth)"),
 		authPass:        flag.String("pass", "", "Web UI & API password (leave empty for no auth)"),
-		stateFile:       flag.String("state-file", "", "路由台账文件路径（留空自动选择 /var/lib/lan-proxy/routes.json 等可写位置）"),
+		stateFile:       flag.String("state-file", "", "路由台账文件路径（留空自动选择 /var/lib/nettool/routes.json 等可写位置）"),
 		restoreRoutes:   flag.Bool("restore-routes", false, "启动时自动重新下发台账中已失效的路由"),
 		domainRefresh:   flag.Duration("domain-refresh", 5*time.Minute, "域名路由自动重新解析间隔（0 表示关闭）"),
 		startProxy:      flag.Bool("start-proxy", false, "启动时无条件开启 SOCKS5 代理（不加则按上次退出时的开关状态恢复）"),

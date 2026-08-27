@@ -8,7 +8,7 @@ import (
 	"net"
 	"net/http"
 
-	"lan_router_socks5/internal/route"
+	"nettool/internal/route"
 )
 
 func handleRoutes(w http.ResponseWriter, r *http.Request) {

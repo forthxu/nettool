@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"lan_router_socks5/internal/netdiag"
+	"nettool/internal/netdiag"
 )
 
 func handleDiagPing(w http.ResponseWriter, r *http.Request) {

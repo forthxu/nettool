@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"lan_router_socks5/internal/netiface"
-	"lan_router_socks5/internal/netutil"
+	"nettool/internal/netiface"
+	"nettool/internal/netutil"
 )
 
 // 两种诊断。前端按 kind 记住最近一次任务，刷新页面后还能接着看。

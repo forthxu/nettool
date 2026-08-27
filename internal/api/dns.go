@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"lan_router_socks5/internal/dnsserver"
+	"nettool/internal/dnsserver"
 )
 
 func dnsStatusPayload() map[string]interface{} {

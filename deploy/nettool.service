@@ -1,5 +1,5 @@
 [Unit]
-Description=LAN Multi-Router & SOCKS5 Proxy Manager
+Description=nettool - 网络管理工具（SOCKS5 代理 / 路由调度 / DNS）
 After=network.target
 
 [Service]
@@ -8,7 +8,7 @@ User=root
 WorkingDirectory=/usr/local/bin
 # 代理与 DNS 的开关状态存在配置文件里，重启后按上次退出前的状态恢复；
 # 想不管上次状态、每次都把代理拉起来，再加上 -start-proxy（DNS 则是 -start-dns）
-ExecStart=/usr/local/bin/lan_proxy -socks-port 1080 -api-port 8080 -user admin -pass your_secure_password
+ExecStart=/usr/local/bin/nettool -socks-port 8091 -api-port 8090 -user admin -pass your_secure_password
 Restart=always
 RestartSec=5
 
