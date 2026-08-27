@@ -2,9 +2,11 @@ package proxy
 
 import (
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/armon/go-socks5"
@@ -254,4 +256,46 @@ func readPersistedProxy(t *testing.T, path string) configFile {
 		t.Fatalf("配置文件不是合法 JSON: %v", err)
 	}
 	return state
+}
+
+// 统计口径按用户视角，不按 socket 视角：MonitoredConn 包的是客户端那一侧的
+// 连接，所以写给客户端的才是下行，从客户端读到的是上行。方向弄反过一次，
+// 界面上会变成「下行 3MB / 上行 15MB」这种一眼假的数，这里钉死。
+func TestMonitoredConnByteDirection(t *testing.T) {
+	clientSide, proxySide := net.Pipe()
+	defer clientSide.Close()
+	defer proxySide.Close()
+
+	info := &ConnectionInfo{ID: "test-direction"}
+	mc := &MonitoredConn{Conn: proxySide, info: info}
+
+	beforeIn := atomic.LoadInt64(&Stats.totalBytesIn)
+	beforeOut := atomic.LoadInt64(&Stats.totalBytesOut)
+
+	// 代理写给客户端 = 客户端在下载
+	download := []byte("0123456789")
+	go io.ReadFull(clientSide, make([]byte, len(download)))
+	if _, err := mc.Write(download); err != nil {
+		t.Fatalf("写给客户端失败: %v", err)
+	}
+
+	// 客户端发给代理 = 客户端在上传
+	upload := []byte("abc")
+	go clientSide.Write(upload)
+	if _, err := io.ReadFull(mc, make([]byte, len(upload))); err != nil {
+		t.Fatalf("从客户端读失败: %v", err)
+	}
+
+	if info.BytesIn != int64(len(download)) {
+		t.Errorf("单连接下行 BytesIn = %d, 期望 %d", info.BytesIn, len(download))
+	}
+	if info.BytesOut != int64(len(upload)) {
+		t.Errorf("单连接上行 BytesOut = %d, 期望 %d", info.BytesOut, len(upload))
+	}
+	if got := atomic.LoadInt64(&Stats.totalBytesIn) - beforeIn; got != int64(len(download)) {
+		t.Errorf("全局下行增量 = %d, 期望 %d", got, len(download))
+	}
+	if got := atomic.LoadInt64(&Stats.totalBytesOut) - beforeOut; got != int64(len(upload)) {
+		t.Errorf("全局上行增量 = %d, 期望 %d", got, len(upload))
+	}
 }

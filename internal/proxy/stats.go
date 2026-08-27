@@ -17,8 +17,8 @@ type ConnectionInfo struct {
 	ID         string    `json:"id"`
 	ClientAddr string    `json:"client_addr"`
 	TargetAddr string    `json:"target_addr"`
-	BytesIn    int64     `json:"bytes_in"`  // Download
-	BytesOut   int64     `json:"bytes_out"` // Upload
+	BytesIn    int64     `json:"bytes_in"`  // 下行：代理发给客户端的字节数
+	BytesOut   int64     `json:"bytes_out"` // 上行：客户端发给代理的字节数
 	StartTime  time.Time `json:"start_time"`
 }
 
@@ -113,11 +113,14 @@ type MonitoredConn struct {
 	owner *statsListener // 停止代理时用来主动断开这条隧道
 }
 
+// 注意方向：包住的是客户端那一侧的连接，所以从这条 socket 读到的字节
+// 是客户端发上来的（上行），写出去的才是客户端收到的（下行）。
+// 统计口径按用户视角记，别按 socket 视角记，否则界面上下行会反过来。
 func (mc *MonitoredConn) Read(b []byte) (int, error) {
 	n, err := mc.Conn.Read(b)
 	if n > 0 {
-		atomic.AddInt64(&mc.info.BytesIn, int64(n))
-		Stats.AddBytes(int64(n), 0)
+		atomic.AddInt64(&mc.info.BytesOut, int64(n))
+		Stats.AddBytes(0, int64(n))
 	}
 	return n, err
 }
@@ -125,8 +128,8 @@ func (mc *MonitoredConn) Read(b []byte) (int, error) {
 func (mc *MonitoredConn) Write(b []byte) (int, error) {
 	n, err := mc.Conn.Write(b)
 	if n > 0 {
-		atomic.AddInt64(&mc.info.BytesOut, int64(n))
-		Stats.AddBytes(0, int64(n))
+		atomic.AddInt64(&mc.info.BytesIn, int64(n))
+		Stats.AddBytes(int64(n), 0)
 	}
 	return n, err
 }
