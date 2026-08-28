@@ -31,6 +31,9 @@
             <button id="tab-btn-trace" onclick="switchTab('trace')" class="pb-3 -mb-px text-sm font-medium transition">路由追踪</button>
         </nav>
 
+        <!-- 本机出口能力自陈：做不到的事情要说出来，不能让用户以为流量走了指定线路 -->
+        <div id="capability-banner" class="hidden mb-6"></div>
+
         <!-- ============ Tab 1: SOCKS5 代理 ============ -->
         <section id="tab-proxy">
             <!-- Stats Overview Cards -->
@@ -53,12 +56,28 @@
                 </div>
             </div>
 
+            <!-- 代理实例：每个实例一个端口、一条出口线路，互不影响 -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 mb-6 px-5 py-4">
+                <div class="flex justify-between items-center mb-3">
+                    <div>
+                        <h2 class="text-base font-semibold text-gray-700">代理实例</h2>
+                        <p class="text-xs text-gray-400 mt-0.5">上方统计是全部实例的合计；选中一个实例后，下面的配置与连接列表都只针对它。</p>
+                    </div>
+                    <button onclick="addInstance()" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition">新建实例</button>
+                </div>
+                <div id="instance-list" class="flex flex-wrap gap-2"></div>
+            </div>
+
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <!-- Proxy Config Card -->
                 <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 lg:col-span-1">
-                    <div class="flex justify-between items-center mb-4">
-                        <h2 class="text-lg font-semibold text-gray-700">SOCKS5 代理配置</h2>
+                    <div class="flex justify-between items-center mb-1">
+                        <h2 class="text-lg font-semibold text-gray-700">实例配置</h2>
                         <button type="button" id="proxy-toggle-btn" onclick="toggleProxy()" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-400">…</button>
+                    </div>
+                    <div class="flex justify-between items-center mb-4">
+                        <span id="proxy-instance-label" class="text-xs text-gray-400">-</span>
+                        <button type="button" id="proxy-delete-btn" onclick="deleteInstance()" class="text-xs text-red-500 hover:text-red-700 font-medium">删除该实例</button>
                     </div>
                     <div class="space-y-4">
                         <div class="flex justify-between text-sm">
@@ -74,73 +93,145 @@
                             <span id="proxy-uptime" class="text-gray-700 text-xs">-</span>
                         </div>
                         <div>
+                            <label class="block text-xs text-gray-500 mb-1">实例名称</label>
+                            <input type="text" id="new-instance-name" placeholder="例: 电信线路" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
                             <label class="block text-xs text-gray-500 mb-1">监听端口</label>
                             <input type="number" id="new-socks-port" value="8091" oninput="syncEgressCommand()" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
                         </div>
                         <div>
                             <div class="flex justify-between items-center mb-1">
-                                <label for="outbound-ip-select" class="block text-xs text-gray-500">代理出口 IP (绑定本地网卡走指定网关)</label>
-                                <button type="button" onclick="loadInterfaces()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">刷新</button>
+                                <label for="uplink-select" class="block text-xs text-gray-500">出口线路（决定走哪个网关）</label>
+                                <button type="button" onclick="switchTab('routes')" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">管理线路</button>
                             </div>
-                            <select id="outbound-ip-select" onchange="onOutboundSelectChange()" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono bg-white">
-                                <option value="">留空（默认自动选择）</option>
-                                <option value="__manual__">手动输入…</option>
+                            <select id="uplink-select" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                                <option value="">系统默认线路</option>
                             </select>
-                            <input type="text" id="new-outbound-ip" placeholder="例: 192.168.1.20" class="hidden w-full mt-2 px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
-                            <p class="mt-2 text-xs text-gray-400 leading-relaxed">绑定源 IP 后是否真的走该网关，取决于系统路由：同一网卡上的多个 IP 通常仍走同一条默认路由，需要策略路由或在「路由管理」里按目标网段指定网关。</p>
+                            <p class="mt-2 text-xs text-gray-400 leading-relaxed">这是「让不同端口走不同网关」的正确做法。线路未生效时本实例会拒绝启动，而不是悄悄从默认网关出去。</p>
                         </div>
                         <div>
                             <label for="new-dns" class="block text-xs text-gray-500 mb-1">代理 DNS（留空用系统 DNS）</label>
                             <input type="text" id="new-dns" placeholder="例: 8.8.8.8" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
-                            <p class="mt-2 text-xs text-gray-400 leading-relaxed">客户端用 <span class="font-mono">--socks5-hostname</span> 时域名是交给代理解析的。系统 DNS 若在被污染的网络里会返回假地址，这时哪怕出口在国外也连不上；填一个境外 DNS，查询会从上面绑定的出口 IP 发出去。</p>
+                            <p class="mt-2 text-xs text-gray-400 leading-relaxed">客户端用 <span class="font-mono">--socks5-hostname</span> 时域名是交给代理解析的。系统 DNS 若在被污染的网络里会返回假地址，这时哪怕出口在国外也连不上；填一个境外 DNS，查询会跟着上面选的出口线路走。</p>
                         </div>
                         <button id="proxy-save-btn" onclick="updateProxyConfig()" class="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm hover:bg-indigo-700 transition font-medium">保存配置</button>
+                    </div>
+                </div>
 
-                        <!-- 出口公网 IP 探测 -->
-                        <div class="pt-4 border-t">
-                            <div class="flex justify-between items-center mb-1">
-                                <span class="text-xs text-gray-500">实际出口公网 IP</span>
-                                <button type="button" id="egress-check-btn" onclick="checkEgressIP()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">检测</button>
+                <div class="lg:col-span-2 space-y-6">
+                    <!-- 出口公网 IP 探测：放在连接监控之上，因为它回答的是
+                         「这个实例的流量到底从哪儿出去的」，看连接之前先要确认这件事 -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50/50">
+                            <h2 class="text-base font-semibold text-gray-700">实际出口公网 IP</h2>
+                            <button type="button" id="egress-check-btn" onclick="checkEgressIP()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">检测</button>
+                        </div>
+                        <div class="px-6 py-4 grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                            <div>
+                                <div id="egress-result" class="text-sm font-mono text-gray-400">尚未检测</div>
+                                <div id="egress-detail" class="text-xs text-gray-400 mt-1 leading-relaxed whitespace-pre-line"></div>
                             </div>
-                            <div id="egress-result" class="text-sm font-mono text-gray-400">尚未检测</div>
-                            <div id="egress-detail" class="text-xs text-gray-400 mt-1 leading-relaxed whitespace-pre-line"></div>
-                            <div class="mt-2 text-xs text-gray-400">
+                            <div class="text-xs text-gray-400">
                                 等价命令：
                                 <code id="egress-command" class="block mt-1 px-2 py-1.5 bg-gray-50 border rounded text-gray-600 font-mono break-all cursor-pointer" onclick="copyEgressCommand()" title="点击复制">curl --socks5-hostname 127.0.0.1:8091 'https://myip.ipip.net/'</code>
                             </div>
                         </div>
                     </div>
-                </div>
 
-                <!-- Active Connections Table -->
-                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden lg:col-span-2">
-                    <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50/50">
-                        <h2 class="text-base font-semibold text-gray-700">实时连接监控 (Active Connections)</h2>
-                        <span class="text-xs text-gray-400">每2秒自动刷新</span>
-                    </div>
-                    <div class="overflow-x-auto max-h-[420px] overflow-y-auto">
-                        <table class="w-full text-left border-collapse">
-                            <thead>
-                                <tr class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider sticky top-0">
-                                    <th class="px-4 py-3 font-medium">源地址 (Client)</th>
-                                    <th class="px-4 py-3 font-medium">目标地址 (Target)</th>
-                                    <th class="px-4 py-3 font-medium text-right">流入 (Down)</th>
-                                    <th class="px-4 py-3 font-medium text-right">流出 (Up)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="conns-table-body" class="divide-y divide-gray-200 text-xs font-mono">
-                                <tr>
-                                    <td colspan="4" class="px-4 py-4 text-center text-gray-400">暂无活跃连接</td>
-                                </tr>
-                            </tbody>
-                        </table>
+                    <!-- Active Connections Table -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50/50">
+                            <h2 class="text-base font-semibold text-gray-700">实时连接监控 (Active Connections)</h2>
+                            <span class="text-xs text-gray-400">每2秒自动刷新</span>
+                        </div>
+                        <div class="overflow-x-auto max-h-[420px] overflow-y-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead>
+                                    <tr class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider sticky top-0">
+                                        <th class="px-4 py-3 font-medium">源地址 (Client)</th>
+                                        <th class="px-4 py-3 font-medium">目标地址 (Target)</th>
+                                        <th class="px-4 py-3 font-medium text-right">流入 (Down)</th>
+                                        <th class="px-4 py-3 font-medium text-right">流出 (Up)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="conns-table-body" class="divide-y divide-gray-200 text-xs font-mono">
+                                    <tr>
+                                        <td colspan="4" class="px-4 py-4 text-center text-gray-400">暂无活跃连接</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
+
+            <details class="mt-6 rounded-xl border border-gray-100 bg-white shadow-sm">
+                <summary class="cursor-pointer select-none px-6 py-4 text-sm font-medium text-gray-600 hover:text-gray-800">技术原理</summary>
+                <div class="px-6 pb-5 pt-1 text-xs leading-relaxed text-gray-500 space-y-3">
+                    <p><b class="text-gray-600">只代理 TCP。</b>底层用的 <span class="font-mono">armon/go-socks5</span> 只实现了 CONNECT，没有 UDP ASSOCIATE，所以覆盖范围是 TCP 连接 + 代理自己发起的 DNS 查询。客户端的 UDP 流量（QUIC、部分游戏）不会经过这里，会按系统默认路径走。</p>
+                    <p><b class="text-gray-600">实例之间是真的隔离的。</b>每个实例有自己的监听口、统计口径和拨号器，只共用一份台账文件 <span class="font-mono">proxy.json</span>。一个实例起不来（端口被占、绑的线路没生效）不会拖垮别的，也不会拖垮整个进程——启动日志里说明原因，该实例保持停止，后台照常进得去。</p>
+                    <p><b class="text-gray-600">出口是在拨号时施加的。</b>代理本身不决定走哪个网关，它只把绑定线路要求的记号打在出站 socket 上：Linux 是 <span class="font-mono">SO_MARK</span>，macOS 是源地址 + 线路专属端口段里的一个源端口，Windows 是 <span class="font-mono">IP_UNICAST_IF</span>。具体见「路由管理」页的技术原理。<b class="text-gray-600">线路没生效时实例拒绝启动</b>，不会退回默认网关——用户以为流量走了指定线路、实际还在默认出口上，是最难排查的一种故障。</p>
+                    <p><b class="text-gray-600">代理 DNS 走同一条线路。</b>客户端用 <span class="font-mono">--socks5-hostname</span> 时域名是交给代理解析的。那次查询同样带上本实例的出口记号（macOS 上 UDP 也单独有一条 PF 规则），否则查询会从默认网关漏出去，既泄漏了「这个实例在查什么」，拿到的解析结果也可能和数据连接的出口对不上。</p>
+                    <p><b class="text-gray-600">统计怎么来的。</b>每条连接被包一层计数器数字节；「目标地址」这一列则是借 go-socks5 的 RuleSet 钩子记下来的——只有那个位置能同时拿到客户端地址和请求目标。所以表里显示的是客户端请求的原始域名（带上实际解析到的 IP），而不只是一个 IP。</p>
+                    <p><b class="text-gray-600">配置与运行状态是分开的。</b>实例停着的时候也能改配置；开关状态跟着配置一起存盘，进程重启（升级、崩溃、机器重启）后照上次退出前的样子恢复，不用每次再来点一遍。</p>
+                </div>
+            </details>
         </section>
 
         <!-- ============ Tab 2: 路由管理 ============ -->
         <section id="tab-routes" class="hidden">
+            <!-- 出口线路：和目标路由放在一起，因为两者会相互影响
+                 （绑了出口的实例只有在 suppress_prefixlength 可用时才继续遵循下面的目标路由） -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 mb-6 overflow-hidden">
+                <div class="px-6 py-4 border-b bg-gray-50/50 flex justify-between items-center">
+                    <div>
+                        <h2 class="text-base font-semibold text-gray-700">出口线路</h2>
+                        <p class="text-xs text-gray-400 mt-0.5">一条线路 = 一个网关。代理实例绑定线路后，它的出站流量从该网关走，与目标网段无关。</p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button onclick="loadUplinkKernel()" class="text-xs text-gray-500 hover:text-gray-700 font-medium">查看内核规则</button>
+                        <button onclick="loadUplinks()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">刷新</button>
+                    </div>
+                </div>
+
+                <form id="add-uplink-form" onsubmit="addUplink(event)" class="px-6 py-4 grid grid-cols-1 sm:grid-cols-4 gap-4 border-b bg-white">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">线路名称</label>
+                        <input type="text" id="uplink-name" placeholder="例: 电信" class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">网关 IP</label>
+                        <input type="text" id="uplink-gateway" placeholder="例: 192.168.1.254" required list="gateway-options" class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">网卡（留空自动推断）</label>
+                        <input type="text" id="uplink-iface" placeholder="例: eth0" class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
+                    </div>
+                    <div class="flex items-end">
+                        <button type="submit" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-emerald-700 transition">新增线路</button>
+                    </div>
+                </form>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+                                <th class="px-4 py-3 font-medium">线路 / 网关</th>
+                                <th class="px-4 py-3 font-medium">网卡 / 源 IP</th>
+                                <th class="px-4 py-3 font-medium">内核标记</th>
+                                <th class="px-4 py-3 font-medium">状态</th>
+                                <th class="px-4 py-3 font-medium text-right">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="uplinks-table-body" class="divide-y divide-gray-200 text-sm">
+                            <tr><td colspan="5" class="px-4 py-4 text-center text-gray-400">正在加载...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="uplink-kernel" class="hidden px-6 py-4 border-t bg-gray-50/50 text-xs font-mono whitespace-pre-wrap text-gray-600 max-h-64 overflow-y-auto"></div>
+            </div>
+
             <!-- Add Route Card -->
             <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
                 <h2 class="text-lg font-semibold text-gray-700 mb-4">新增自定义路由规则</h2>
@@ -217,6 +308,23 @@
                     </div>
                 </div>
             </div>
+
+            <details class="mt-6 rounded-xl border border-gray-100 bg-white shadow-sm">
+                <summary class="cursor-pointer select-none px-6 py-4 text-sm font-medium text-gray-600 hover:text-gray-800">技术原理</summary>
+                <div class="px-6 pb-5 pt-1 text-xs leading-relaxed text-gray-500 space-y-3">
+                    <p><b class="text-gray-600">这一页上是两件正交的事。</b>下半部分的「自定义路由」按<b>目的地</b>选网关，下发到系统主路由表，<b>全机生效</b>；上半部分的「出口线路」按<b>实例</b>选网关。两者可以同时用。</p>
+                    <p><b class="text-gray-600">为什么按实例选网关需要额外机制。</b>路由查询的输入只有目的地址，所以光靠加路由，永远分不出「这个包是 8091 实例发的、那个是 8092 发的」——两个实例访问同一个目标时内核只有一条路由，必然走同一个网关。必须给包刻上一个记号，再让内核按记号选路。这个记号就是选择器。</p>
+                    <p><b class="text-gray-600">Linux 的选择器是 fwmark。</b>每条线路一个 mark、一张独立路由表、一条 <span class="font-mono">ip rule</span>：</p>
+                    <pre class="font-mono bg-gray-50 border rounded px-3 py-2 overflow-x-auto text-gray-600">ip route replace default via 192.168.1.254 dev eth0 src 192.168.1.5 table 7000
+ip rule add priority 300 fwmark 0x40000000/0xff000000 table main suppress_prefixlength 0
+ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000</pre>
+                    <p>编号是刻意挑的：路由表 <span class="font-mono">7000–7063</span> 避开内核保留的 0/253/254/255 与 mwan3 占用的 1–250；mark 用最高字节 <span class="font-mono">0x40000000–0x7f000000</span>，既有的使用者（mwan3、SQM、WireGuard、Tailscale）全挤在低三字节；优先级 <span class="font-mono">300–427</span> 排在 <span class="font-mono">0: local</span> 之后、mwan3(1001+) 与 <span class="font-mono">main</span>(32766) 之前。第二条规则里的 <span class="font-mono">suppress_prefixlength 0</span> 很关键：没有它，打了标的包完全不查主表，下面那张「自定义路由」表里的条目和 LAN 直连路由会统统失效；加上它之后主表只忽略默认路由、保留所有更具体的条目。<span class="font-mono">ip</span> 命令不支持该参数时会自动降级，并在能力横幅、这一页和启动日志三处都说明后果。</p>
+                    <p><b class="text-gray-600">macOS 的选择器是源端口段。</b>没有 fwmark，但 PF 能按五元组把包 <span class="font-mono">route-to</span> 到指定下一跳。每条线路分一段 256 个专属源端口（<span class="font-mono">20000–36383</span>，在系统临时端口段 49152 起之外），拨号时从段内选一个绑上，PF 里按「源 IP + 源端口段」匹配的规则把包送到该线路的网关。TCP 和 UDP 各一条规则——代理自己的 DNS 走 UDP:53，漏了它查询会从默认网关跑掉。规则写在 anchor <span class="font-mono">com.apple/nettool</span> 下，借系统 <span class="font-mono">/etc/pf.conf</span> 里现成的 <span class="font-mono">anchor "com.apple/*"</span> 生效，<b>不用改你的 pf.conf</b>；启动时会实际读一遍确认那行还在。</p>
+                    <p><b class="text-gray-600">「验证」按钮问的是内核，不联网、不发一个字节。</b>Linux 上是 <span class="font-mono">ip route get &lt;目标&gt; mark 0x…</span>，macOS 上是把 anchor 里此刻真正生效的规则读回来比对。这是唯一能区分同一网段两个网关的检查——两个网关同属一个 ISP 时，公网 IP 探测是分不出差别的。</p>
+                    <p><b class="text-gray-600">自定义路由带台账。</b>本程序下发的条目在 Linux 上打了 <span class="font-mono">proto 210</span> 标记，台账丢了也能靠 <span class="font-mono">ip route show proto 210</span> 认回来。填域名时会当场解析 A 记录、为每个 IPv4 下一条 /32 主机路由，之后每 5 分钟重解析一次：新增的补上、撤下的不再解析到的删掉；DNS 解析失败时保留现有路由不动，免得一次网络抖动把配置清空。</p>
+                    <p><b class="text-gray-600">崩溃残留只能靠开机对账。</b>内核里的路由和 <span class="font-mono">ip rule</span> 都没有「谁加的」这种信息，而进程被 <span class="font-mono">kill -9</span> 时拦不住也清不掉。所以退出时不做清理，改为启动时拿台账对一遍，把本程序装过、但台账里已经没有的孤儿规则和路由表清扫掉。macOS 不需要清扫：PF 的 anchor 是整份规则集一起加载的，下次启动重新加载时残留会被整份冲掉。</p>
+                </div>
+            </details>
         </section>
 
         <!-- ============ Tab 3: 网卡配置 ============ -->
@@ -241,7 +349,7 @@
                         <div id="wifi-last-switch" class="mt-1 text-gray-700 text-xs leading-relaxed">-</div>
                     </div>
                 </div>
-                <p id="wifi-ssid-error" class="hidden mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 leading-relaxed"></p>
+                <p id="wifi-ssid-error" class="hidden mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 leading-relaxed whitespace-pre-line"></p>
             </div>
 
             <!-- 网卡列表 -->
@@ -326,7 +434,7 @@
                             <label class="block text-xs text-gray-500 mb-1">Wi-Fi 名称 (SSID)</label>
                             <input type="text" id="wp-ssid" required placeholder="例: DemoNet_5G" class="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
                             <label class="mt-1 flex items-center gap-1 text-xs text-gray-400">
-                                <input type="checkbox" id="wp-bind-current" class="rounded"> 绑定当前这个 Wi-Fi（读不到 SSID 时靠系统指纹匹配）
+                                <input type="checkbox" id="wp-bind-current" onchange="this.dataset.touched='1'" class="rounded"> 绑定当前这个 Wi-Fi（读不到 SSID 时靠系统指纹匹配）<span id="wp-bind-hint" class="hidden text-amber-600"></span>
                             </label>
                             <label class="mt-1 flex items-center gap-1 text-xs text-gray-400">
                                 <input type="checkbox" id="wp-default" onchange="onWPDefaultChange()" class="rounded"> 作为默认档：连到没有单独配置的 Wi-Fi 时套用
@@ -382,6 +490,23 @@
                     </table>
                 </div>
             </div>
+
+            <details class="mt-6 rounded-xl border border-gray-100 bg-white shadow-sm">
+                <summary class="cursor-pointer select-none px-6 py-4 text-sm font-medium text-gray-600 hover:text-gray-800">技术原理</summary>
+                <div class="px-6 pb-5 pt-1 text-xs leading-relaxed text-gray-500 space-y-3">
+                    <p><b class="text-gray-600">四个平台的写入对象完全不同</b>，所以这里统一成「目标 + 一组设置」：</p>
+                    <ul class="list-disc pl-5 space-y-1">
+                        <li><b>macOS</b> — <span class="font-mono">networksetup</span>，以「网络服务」为单位（一块网卡可能对应多个服务）</li>
+                        <li><b>Linux</b> — <span class="font-mono">nmcli</span>，以 NetworkManager 的「连接」为单位</li>
+                        <li><b>OpenWrt</b> — UCI，以 <span class="font-mono">/etc/config/network</span> 里的 interface 段（lan / wan / wwan）为单位；读用 <span class="font-mono">ubus call network.interface dump</span>，写用 <span class="font-mono">uci set</span> + <span class="font-mono">commit</span> + <span class="font-mono">network reload</span>。路由器上没有 NetworkManager，nmcli 那条路整个是断的</li>
+                        <li><b>Windows</b> — <span class="font-mono">netsh</span>，以接口名为单位</li>
+                    </ul>
+                    <p>所以列表里的「配置对象」才是真正被写入的东西，<span class="font-mono">en0</span>/<span class="font-mono">eth0</span>/<span class="font-mono">br-lan</span> 这类设备名只用于展示和匹配。</p>
+                    <p><b class="text-gray-600">读取一律不认本地化文案。</b>Windows 的 <span class="font-mono">netsh</span> / <span class="font-mono">route</span> 输出跟着系统语言走（中文版打印的是「接口 xxx 的配置」「在链路上」），按文案解析在中文系统上必然错。所以那边的读取走 PowerShell 的 <span class="font-mono">Get-Net*</span>（属性名与枚举值固定），或者只认数据行的形状。</p>
+                    <p><b class="text-gray-600">Wi-Fi 自动切换是轮询的。</b>默认每 30 秒查一次当前 SSID（<span class="font-mono">-wifi-watch</span> 可调，0 表示关闭），发现换了网络就套用对应的配置档。没有启用任何配置档时只记录 SSID、不动配置。</p>
+                    <p><b class="text-gray-600">改网卡配置需要管理员/root 权限</b>，而且是<b>立即写进系统</b>的持久设置——不是本程序内部的转发规则，退出本程序也不会还原。切到 DHCP 再切回来是把它改回去的办法。</p>
+                </div>
+            </details>
         </section>
 
         <!-- ============ Tab 4: DNS 服务 ============ -->
@@ -639,6 +764,20 @@
                     </table>
                 </div>
             </div>
+
+            <details class="mt-6 rounded-xl border border-gray-100 bg-white shadow-sm">
+                <summary class="cursor-pointer select-none px-6 py-4 text-sm font-medium text-gray-600 hover:text-gray-800">技术原理</summary>
+                <div class="px-6 pb-5 pt-1 text-xs leading-relaxed text-gray-500 space-y-3">
+                    <p><b class="text-gray-600">一次查询的顺序：静态记录 → 缓存 → 上游。</b>「来源」那一列显示的就是这次实际由谁回答的。</p>
+                    <p><b class="text-gray-600">上游有四种形态。</b><span class="font-mono">223.5.5.5</span> 是普通 UDP（失败或被截断时自动改走 TCP）、<span class="font-mono">tcp://</span> 强制 TCP、<span class="font-mono">tls://</span> 是 DoT、<span class="font-mono">https://</span> 是 DoH。TCP 与 DoT 在报文外面套 2 字节长度前缀，DoH 则是一次 HTTP 请求，每个 DoH 上游各自复用连接。</p>
+                    <p><b class="text-gray-600">分流按域名规则最长匹配。</b>给上游加了域名限制后，命中最长那条规则的上游来回答；一条规则都没命中时，退回到没写域名限制的兜底上游。这就是「境内域名走境内 DNS、境外域名走境外 DNS」的做法。</p>
+                    <p><b class="text-gray-600">两种查询策略。</b>「顺序」是按列表从上往下试，前一个失败才轮到下一个，所以上游的先后顺序有意义（列表里可以上下调）；「并发」是同时问所有上游、谁先回用谁，上游里混着境内境外时能省掉一次超时等待——不然慢的那个会把整次查询拖住。</p>
+                    <p><b class="text-gray-600">缓存存的是入库那一刻的原始报文</b>，取出来时按已经缓存了多久把 TTL 扣掉再返回，否则客户端会以为记录比实际更新。所以「最近查询」里同一个域名第二次的 TTL 会随时间递减。查不到记录的应答也会做短时负缓存。</p>
+                    <p><b class="text-gray-600">DoT/DoH 上游是域名时需要 bootstrap。</b>本机很可能正把这个 DNS 服务设成系统解析器，再走系统解析去查上游的域名就是自己问自己。配了 bootstrap 就用它先把上游域名解析成 IP。</p>
+                    <p><b class="text-gray-600">改配置会重启查询引擎。</b>一次启动对应一个引擎实例，换配置就整个换掉，处理中的查询不会看到改了一半的配置。</p>
+                    <p><b class="text-gray-600">监听 53 端口需要 root/管理员</b>，而且要先确认端口没被系统自带的解析器（systemd-resolved、dnsmasq、mDNSResponder）占着。想先验证可以用 <span class="font-mono">-dns-port 5353</span> 换个端口起。</p>
+                </div>
+            </details>
         </section>
 
         <!-- ============ Tab 5: Ping ============ -->
@@ -732,6 +871,16 @@
                     </div>
                 </div>
             </div>
+
+            <details class="mt-6 rounded-xl border border-gray-100 bg-white shadow-sm">
+                <summary class="cursor-pointer select-none px-6 py-4 text-sm font-medium text-gray-600 hover:text-gray-800">技术原理</summary>
+                <div class="px-6 pb-5 pt-1 text-xs leading-relaxed text-gray-500 space-y-3">
+                    <p><b class="text-gray-600">ICMP 有两种套接字，权限要求不一样。</b>非特权的 ICMP <b>数据报</b>套接字（macOS 默认就能用；Linux 要求当前用户的 gid 落在 <span class="font-mono">net.ipv4.ping_group_range</span> 内）和需要 root 的<b>原始</b>套接字。ping <b>优先用前者</b>，好让非 root 也能用。Windows 压根没有非特权 ICMP 套接字，只剩原始套接字这一条路，所以那边必须以管理员身份运行，另外防火墙要放行 ICMP 入站。</p>
+                    <p><b class="text-gray-600">「指定源 IP」是这里最有用的开关。</b>它把 ICMP 套接字绑到本机某个地址上，于是回包走的是那条链路。同一个目标换个源 IP 再试一次，哪条线路通、哪条不通就一目了然——这也是排查出口线路时的第一步。</p>
+                    <p><b class="text-gray-600">发包节奏。</b>按设定的间隔一包一包发，每包等到回包或超时为止，结果一条条追加，页面轮询时边跑边看。次数填 0 是「一直 ping」；页面关掉之后没人来停它，所以内部兜了一个总时长上限，到点自动停。</p>
+                    <p><b class="text-gray-600">超时不等于不通。</b>不少主机和防火墙默认丢弃 ICMP echo，TCP 却是通的。那种情况下 ping 不通不说明问题，改用「实际出口公网 IP」检测或直接 <span class="font-mono">curl</span> 更可靠。</p>
+                </div>
+            </details>
         </section>
 
         <!-- ============ Tab 6: 路由追踪 ============ -->
@@ -806,6 +955,16 @@
                     </div>
                 </div>
             </div>
+
+            <details class="mt-6 rounded-xl border border-gray-100 bg-white shadow-sm">
+                <summary class="cursor-pointer select-none px-6 py-4 text-sm font-medium text-gray-600 hover:text-gray-800">技术原理</summary>
+                <div class="px-6 pb-5 pt-1 text-xs leading-relaxed text-gray-500 space-y-3">
+                    <p><b class="text-gray-600">靠 TTL 把路径问出来。</b>TTL 从 1 开始一跳一跳往上加：TTL 用完的那台路由器会回一个 <span class="font-mono">Time Exceeded</span>，从而暴露自己的地址；哪一跳收到的是目标回的 <span class="font-mono">Echo Reply</span>，就说明到了。</p>
+                    <p><b class="text-gray-600">这里必须用 root。</b>与 ping 相反，traceroute <b>优先用原始套接字</b>——非特权的 ICMP 数据报套接字在 Linux 上收不到中间路由器回的 <span class="font-mono">Time Exceeded</span>，那样整趟都会是超时。Windows 上同样需要管理员身份；那个平台还读不到回包的 TTL（底层库没实现对应的控制消息），所以 TTL 那一列会显示 0。</p>
+                    <p><b class="text-gray-600">星号不代表断了。</b>很多路由器出于策略不回 ICMP，或者对 ICMP 限速，中间几跳超时是常态。只要后面的跳还有回应、最终到达了目标，路径就是通的。</p>
+                    <p><b class="text-gray-600">「指定源 IP」决定这趟从哪条线路出去。</b>多网卡/多网关的机器上，不指定就是走系统默认路径。想确认某条出口线路实际经过哪些路由器，就把源 IP 填成那条线路的本机地址。</p>
+                </div>
+            </details>
         </section>
     </div>
 
@@ -836,6 +995,7 @@
             // 路由数据只在首次进入该标签页时拉取，之后靠刷新按钮
             if (name === 'routes' && !routesTabLoaded) {
                 routesTabLoaded = true;
+                loadUplinks();
                 loadRoutes();
                 loadSystemRoutes();
             }
@@ -865,8 +1025,6 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
 
-        // 当前生效的出口 IP（由 /api/status 或 /api/interfaces 返回）
-        let currentOutboundIP = '';
         let proxyUptimeBase = null;
         let proxyRunning = false;
 
@@ -906,10 +1064,118 @@
                 proxyRunning ? formatTime(data.started_at) : '-';
         }
 
+        // 当前选中的实例。所有代理页操作都带上它，顶部统计卡则是全部实例的合计。
+        let selectedInstance = '';
+        try { selectedInstance = localStorage.getItem('nettool-proxy-instance') || ''; } catch (err) { /* 隐私模式下忽略 */ }
+
+        function instanceQuery(prefix) {
+            return selectedInstance ? prefix + 'id=' + encodeURIComponent(selectedInstance) : '';
+        }
+
+        function selectInstance(id) {
+            selectedInstance = id;
+            try { localStorage.setItem('nettool-proxy-instance', id); } catch (err) { /* 隐私模式下忽略 */ }
+            loadStatus();
+            loadStats();
+        }
+
+        function renderInstanceList(instances) {
+            let box = document.getElementById('instance-list');
+            if (!box) return;
+            instances = instances || [];
+            box.innerHTML = '';
+            if (instances.length === 0) {
+                box.innerHTML = '<span class="text-xs text-gray-400">还没有代理实例</span>';
+                return;
+            }
+            instances.forEach(i => {
+                let active = i.id === selectedInstance;
+                let btn = document.createElement('button');
+                btn.onclick = () => selectInstance(i.id);
+                btn.className = 'px-3 py-2 rounded-lg border text-left transition ' +
+                    (active ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300');
+                let dot = i.is_running ? 'bg-emerald-500' : 'bg-gray-300';
+                let uplink = i.uplink_id ? ` · 线路 ${escapeHtml(i.uplink_id)}` : '';
+                btn.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full ${dot}"></span>
+                        <span class="text-sm font-medium text-gray-700">${escapeHtml(i.name)}</span>
+                    </div>
+                    <div class="text-xs text-gray-400 font-mono mt-0.5">:${escapeHtml(i.port)}${uplink}</div>`;
+                box.appendChild(btn);
+            });
+        }
+
+        // 出口线路下拉，供实例挑一条线路绑定
+        async function loadUplinkOptions(current) {
+            let sel = document.getElementById('uplink-select');
+            if (!sel) return;
+            let list = [];
+            try {
+                list = (await (await fetch('/api/uplinks')).json()).uplinks || [];
+            } catch (err) { /* 线路读不到时至少保留「系统默认」 */ }
+
+            sel.innerHTML = '';
+            sel.appendChild(makeOption('', '系统默认线路'));
+            list.forEach(u => {
+                let label = `${u.name}（${u.gateway}${u.interface ? ' · ' + u.interface : ''}）`;
+                if (!u.applied) label += ' — 未生效';
+                sel.appendChild(makeOption(u.id, label));
+            });
+            // 配置里绑的线路已经被删掉时也要保留该项，免得一保存就静默解绑
+            if (current && !list.some(u => u.id === current)) {
+                sel.appendChild(makeOption(current, `${current}（线路已不存在）`));
+            }
+            sel.value = current || '';
+        }
+
+        async function addInstance() {
+            let name = prompt('新实例的名称：', '新代理');
+            if (name === null) return;
+            let port = prompt('监听端口：', '8092');
+            if (port === null) return;
+            try {
+                let res = await fetch('/api/proxy/instances', {
+                    method: 'POST',
+                    body: JSON.stringify({name: name.trim(), port: port.trim()}),
+                });
+                if (!res.ok) { alert('新建失败: ' + await res.text()); return; }
+                let data = await res.json();
+                selectInstance(data.id);
+            } catch (err) {
+                alert('新建失败: ' + err);
+            }
+        }
+
+        async function deleteInstance() {
+            if (!selectedInstance) return;
+            let label = document.getElementById('proxy-instance-label').textContent;
+            if (!confirm(`确定删除实例 ${label}？它会先被停止，现有连接都会断开。`)) return;
+            try {
+                let res = await fetch('/api/proxy/instances?id=' + encodeURIComponent(selectedInstance), {method: 'DELETE'});
+                if (!res.ok) { alert('删除失败: ' + await res.text()); return; }
+                selectInstance(''); // 回到主实例
+            } catch (err) {
+                alert('删除失败: ' + err);
+            }
+        }
+
         function applyStatus(data) {
+            // 服务端认定的实例可能与本地记的不同（比如实例被删了），以服务端为准
+            if (data.id) {
+                selectedInstance = data.id;
+                try { localStorage.setItem('nettool-proxy-instance', data.id); } catch (err) { /* 忽略 */ }
+            }
+            renderInstanceList(data.instances);
+            document.getElementById('proxy-instance-label').textContent =
+                data.id ? `${data.name || ''}（${data.id}）` : '-';
+            document.getElementById('proxy-delete-btn').classList.toggle(
+                'hidden', !data.instances || data.instances.length <= 1);
+
+            document.getElementById('new-instance-name').value = data.name || '';
             document.getElementById('new-socks-port').value = data.socks_port;
             document.getElementById('new-dns').value = data.dns || '';
-            currentOutboundIP = data.outbound_ip || '';
+            loadUplinkOptions(data.uplink_id || '');
 
             // 记下服务端的启动时刻，之后本地自增，不用为了走秒反复请求
             proxyUptimeBase = {
@@ -923,7 +1189,7 @@
 
         async function loadStatus() {
             try {
-                let res = await fetch('/api/status');
+                let res = await fetch('/api/status' + instanceQuery('?'));
                 applyStatus(await res.json());
             } catch (err) {
                 console.error('Failed to load status:', err);
@@ -942,7 +1208,7 @@
                 let res = await fetch('/api/proxy', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({action}),
+                    body: JSON.stringify({id: selectedInstance, action}),
                 });
                 if (!res.ok) {
                     let errText = await res.text();
@@ -978,60 +1244,22 @@
             return `${i.ip}  (${parts.join(' · ')})`;
         }
 
+        // 读本机网卡，给「出口线路」和「路由管理」的网关输入框提供候选。
+        // 代理实例本身不再有"出口 IP"这个概念——走哪个网关由出口线路（即路由）决定。
         async function loadInterfaces() {
-            let sel = document.getElementById('outbound-ip-select');
-            let wasManual = sel.value === '__manual__';
-            let desired = wasManual ? '__manual__' : (sel.value || currentOutboundIP || '');
-
             let list = [];
             try {
                 let res = await fetch('/api/interfaces');
-                let data = await res.json();
-                list = data.interfaces || [];
-                if (typeof data.outbound_ip === 'string') currentOutboundIP = data.outbound_ip;
+                list = (await res.json()).interfaces || [];
             } catch (err) {
                 console.error('Failed to load interfaces:', err);
             }
 
-            sel.innerHTML = '';
-            sel.appendChild(makeOption('', '留空（默认自动选择）'));
-            list.forEach(i => sel.appendChild(makeOption(i.ip, ifaceLabel(i))));
-
-            // 当前配置的 IP 已不在本机网卡列表中时，仍然保留该项，避免静默丢配置
-            if (currentOutboundIP && !list.some(i => i.ip === currentOutboundIP)) {
-                sel.appendChild(makeOption(currentOutboundIP, `${currentOutboundIP}  (当前配置，未检测到对应网卡)`));
-            }
-            sel.appendChild(makeOption('__manual__', '手动输入…'));
-
-            sel.value = desired;
-            if (sel.selectedIndex === -1) sel.value = '';
-            onOutboundSelectChange();
-
-            // 路由管理页的网关输入框复用探测到的网关做候选
             let datalist = document.getElementById('gateway-options');
             datalist.innerHTML = '';
             [...new Set(list.map(i => i.gateway).filter(Boolean))].forEach(gw => {
                 datalist.appendChild(makeOption(gw, gw));
             });
-        }
-
-        function onOutboundSelectChange() {
-            let sel = document.getElementById('outbound-ip-select');
-            let manual = document.getElementById('new-outbound-ip');
-            if (sel.value === '__manual__') {
-                manual.classList.remove('hidden');
-                manual.focus();
-            } else {
-                manual.classList.add('hidden');
-            }
-        }
-
-        function getOutboundIP() {
-            let sel = document.getElementById('outbound-ip-select');
-            if (sel.value === '__manual__') {
-                return document.getElementById('new-outbound-ip').value.trim();
-            }
-            return sel.value;
         }
 
         function syncEgressCommand() {
@@ -1064,14 +1292,16 @@
             detail.textContent = '';
 
             try {
-                let res = await fetch('/api/egress-ip');
+                let res = await fetch('/api/egress-ip' + instanceQuery('?'));
                 let data = await res.json();
 
                 if (data.ok) {
                     result.className = 'text-sm font-mono font-semibold text-emerald-600';
                     result.textContent = data.egress_ip || '(未能从响应中解析出 IP)';
-                    let bound = data.bound_outbound_ip ? `绑定出口 ${data.bound_outbound_ip}` : '未绑定出口 IP（系统默认选路）';
-                    detail.textContent = `${bound} · ${formatTime(data.checked_at)}\n${data.raw || ''}`;
+                    let bound = data.uplink_id ? `出口线路 ${data.uplink_id}` : '未绑定出口线路（系统默认选路）';
+                    detail.textContent = `${bound} · ${formatTime(data.checked_at)}\n${data.raw || ''}` +
+                        '\n注意：两个网关同属一个 ISP 时公网 IP 是一样的，分不出差别；' +
+                        '那种情况请用「路由管理 → 出口线路」里的验证按钮。';
                 } else {
                     result.className = 'text-sm font-mono text-red-600';
                     result.textContent = '检测失败';
@@ -1089,13 +1319,15 @@
 
         async function loadStats() {
             try {
-                let res = await fetch('/api/stats');
+                let res = await fetch('/api/stats' + instanceQuery('?'));
                 let data = await res.json();
 
-                document.getElementById('stat-bytes-in').innerText = formatBytes(data.total_bytes_in);
-                document.getElementById('stat-bytes-out').innerText = formatBytes(data.total_bytes_out);
-                document.getElementById('stat-active-conns').innerText = data.active_connections_count;
-                document.getElementById('stat-total-conns').innerText = data.total_connections;
+                // 顶部四张卡是全部实例的合计；下面的连接列表只属于选中的实例
+                let t = data.totals || data;
+                document.getElementById('stat-bytes-in').innerText = formatBytes(t.total_bytes_in);
+                document.getElementById('stat-bytes-out').innerText = formatBytes(t.total_bytes_out);
+                document.getElementById('stat-active-conns').innerText = t.active_connections_count;
+                document.getElementById('stat-total-conns').innerText = t.total_connections;
 
                 let tbody = document.getElementById('conns-table-body');
                 tbody.innerHTML = '';
@@ -1473,23 +1705,25 @@
 
         async function updateProxyConfig() {
             let port = document.getElementById('new-socks-port').value.trim();
-            let outboundIp = getOutboundIP();
             if (!port) return;
 
             try {
                 let res = await fetch('/api/status', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({socks_port: port, outbound_ip: outboundIp, dns: document.getElementById('new-dns').value.trim()})
+                    body: JSON.stringify({
+                        id: selectedInstance,
+                        name: document.getElementById('new-instance-name').value.trim(),
+                        socks_port: port,
+                        uplink_id: document.getElementById('uplink-select').value,
+                        dns: document.getElementById('new-dns').value.trim(),
+                    })
                 });
                 if (res.ok) {
                     alert(proxyRunning
-                        ? '代理配置修改成功！程序已自动重启代理服务。'
-                        : '配置已保存，代理仍处于停止状态，点「启动代理」后生效。');
-                    // 清空选择，让 loadStatus() 按服务端返回的实际出口 IP 重新定位
-                    document.getElementById('outbound-ip-select').value = '';
-                    document.getElementById('new-outbound-ip').value = '';
-                    // 出口已变，之前的探测结果作废
+                        ? '实例配置修改成功！程序已自动带新配置重启该实例。'
+                        : '配置已保存，该实例仍处于停止状态，点「启动代理」后生效。');
+                    // 出口可能已变，之前的探测结果作废
                     document.getElementById('egress-result').className = 'text-sm font-mono text-gray-400';
                     document.getElementById('egress-result').textContent = '配置已变更，请重新检测';
                     document.getElementById('egress-detail').textContent = '';
@@ -1612,6 +1846,24 @@
             let bind = document.getElementById('wp-bind-current');
             bind.disabled = isDefault;
             if (isDefault) bind.checked = false;
+            syncBindHint();
+        }
+
+        // 系统读不到 SSID 时（macOS 14 起的隐私限制），配置档只有绑上指纹才可能被
+        // 匹配到，否则连什么 Wi-Fi 都只会套用默认档。这种情况下默认替用户勾上，
+        // 并把原因说清楚——不然新建的配置档看着好好的，实际永远不会生效。
+        function syncBindHint() {
+            let bind = document.getElementById('wp-bind-current');
+            let hint = document.getElementById('wp-bind-hint');
+            let isDefault = document.getElementById('wp-default').checked;
+            let needed = wifiState.ssid_readable === false && !!wifiState.current_network_id;
+            if (needed && !isDefault) {
+                if (!bind.dataset.touched) bind.checked = true;
+                hint.textContent = '（本机读不到 SSID，必须绑指纹才能匹配，已默认勾上）';
+                hint.classList.remove('hidden');
+            } else {
+                hint.classList.add('hidden');
+            }
         }
 
         function onWPMethodChange() {
@@ -1708,12 +1960,24 @@
                 : '<span class="text-gray-400">尚未发生</span>';
 
             let errBox = document.getElementById('wifi-ssid-error');
-            if (wifiState.ssid_error) {
-                errBox.textContent = wifiState.ssid_error;
+            let msg = wifiState.ssid_error || '';
+            // 读不到 SSID 时，只记了 SSID 名字的配置档永远匹配不到任何网络，所有
+            // Wi-Fi 都会落到默认档上——表现出来就是"自动切换只生效了一次"。
+            // 这条必须说出来，不然用户只会看到「配置已符合配置档，无需切换」。
+            if (wifiState.ssid_readable === false && wifiState.unbound_profiles > 0) {
+                msg += (msg ? '\n' : '') +
+                    `有 ${wifiState.unbound_profiles} 份配置档只记了 Wi-Fi 名字、没绑定系统指纹，` +
+                    '在读不到 SSID 的系统上它们永远匹配不到任何网络，所有 Wi-Fi 都会套用默认档。' +
+                    '请连上对应的 Wi-Fi 后点它那一行的「立即应用」，会自动把指纹绑上去。';
+            }
+            if (msg) {
+                errBox.textContent = msg;
                 errBox.classList.remove('hidden');
             } else {
                 errBox.classList.add('hidden');
             }
+
+            syncBindHint(); // 能不能读到 SSID 是刚拉回来的，表单上的默认勾选要跟着变
 
             let profiles = wifiState.profiles || [];
             let hasDefault = profiles.some(p => p.is_default);
@@ -2526,11 +2790,212 @@
             });
         }
 
+        // ============ 出口线路 ============
+
+        // 能力横幅。做不到的事必须说出来：用户以为流量走了指定线路、实际还在默认
+        // 网关上，是最难排查的一种故障。
+        async function loadCapability() {
+            let banner = document.getElementById('capability-banner');
+            let cap;
+            try {
+                cap = await (await fetch('/api/capabilities')).json();
+            } catch (err) {
+                banner.classList.add('hidden');
+                return;
+            }
+
+            let bad = (cap.checks || []).filter(c => !c.ok);
+            if (cap.per_gateway_same_interface && bad.length === 0) {
+                banner.classList.add('hidden');
+                return;
+            }
+
+            let head = cap.per_gateway_same_interface
+                ? '出口线路可用，但有以下情况需要注意：'
+                : `本机（${escapeHtml(cap.platform)}）只能按<b>网卡</b>区分出口，同一块网卡上的两个网关无法分开。`
+                  + (cap.platform === 'darwin'
+                      ? ' macOS 以 root 运行（sudo）即可启用 PF 精确出口，那时同网卡的两个网关也能分开。'
+                      : ' 需要该能力请在 Linux / OpenWrt 或 macOS 上运行。');
+
+            let items = bad.map(c => {
+                let line = `<li><span class="font-medium">${escapeHtml(c.name)}</span>`;
+                if (c.detail) line += `：${escapeHtml(c.detail)}`;
+                if (c.remedy) line += `<br><span class="text-amber-700/70">处理办法：<span class="font-mono">${escapeHtml(c.remedy)}</span></span>`;
+                return line + '</li>';
+            }).join('');
+
+            banner.className = 'mb-6 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900';
+            banner.innerHTML = `<div class="font-medium mb-1">出口能力：${escapeHtml(cap.egress_mode)}</div>
+                <div class="text-xs leading-relaxed">${head}</div>
+                ${items ? `<ul class="mt-2 text-xs leading-relaxed list-disc pl-5 space-y-1">${items}</ul>` : ''}`;
+        }
+
+        async function loadUplinks() {
+            let tbody = document.getElementById('uplinks-table-body');
+            let data;
+            try {
+                data = await (await fetch('/api/uplinks')).json();
+            } catch (err) {
+                tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-4 text-center text-red-500">加载失败</td></tr>';
+                return;
+            }
+
+            let list = data.uplinks || [];
+            tbody.innerHTML = '';
+            if (list.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-4 text-center text-gray-400">还没有出口线路。新增一条后，就能把不同的代理实例绑到不同网关上。</td></tr>';
+                return;
+            }
+
+            let mode = (data.capability || {}).egress_mode;
+            let fwmark = mode === 'fwmark';
+            // PF 模式下的选择器是源端口段，同样有可读回来的内核状态可验证
+            let pfRouteTo = mode === 'pf_route_to';
+            let verifiable = fwmark || pfRouteTo;
+            list.forEach(u => {
+                let tr = document.createElement('tr');
+                tr.className = 'hover:bg-gray-50';
+
+                let status = u.applied
+                    ? badge('已生效', 'bg-emerald-50 text-emerald-700')
+                    : badge('未生效', 'bg-red-50 text-red-700');
+                if (u.degraded) status += badge('仅按网卡', 'bg-amber-50 text-amber-700 ml-1');
+                if (u.applied && u.prefer_main === false) {
+                    status += badge('不遵循目标路由', 'bg-amber-50 text-amber-700 ml-1');
+                }
+                let err = u.last_error
+                    ? `<div class="text-xs text-red-600 mt-1 leading-relaxed">${escapeHtml(u.last_error)}</div>` : '';
+
+                // 这一列显示的是"这条线路靠什么被区分出来"：Linux 是 fwmark，
+                // macOS 是专属源端口段，只能按网卡绑的平台则什么都没有
+                let marks;
+                if (fwmark) {
+                    marks = `<span class="font-mono text-xs">mark 0x${(u.mark >>> 0).toString(16)}</span>
+                       <div class="text-xs text-gray-400 font-mono">表 ${u.table} · 优先级 ${u.rule_prio}</div>`;
+                } else if (pfRouteTo) {
+                    marks = `<span class="font-mono text-xs">源端口 ${u.source_port_start}-${u.source_port_end}</span>
+                       <div class="text-xs text-gray-400">PF route-to</div>`;
+                } else {
+                    marks = '<span class="text-xs text-gray-400">—（本平台绑网卡，不用标记）</span>';
+                }
+
+                tr.innerHTML = `
+                    <td class="px-4 py-3 align-top">
+                        <div class="font-medium text-gray-700">${escapeHtml(u.name)}</div>
+                        <div class="text-xs text-gray-500 font-mono">${escapeHtml(u.gateway)}</div>
+                    </td>
+                    <td class="px-4 py-3 align-top font-mono text-xs text-gray-600">
+                        ${escapeHtml(u.interface || '-')}
+                        <div class="text-gray-400">${escapeHtml(u.source_ip || '源地址由内核选择')}</div>
+                    </td>
+                    <td class="px-4 py-3 align-top text-gray-600">${marks}</td>
+                    <td class="px-4 py-3 align-top">${status}${err}</td>
+                    <td class="px-4 py-3 align-top text-right whitespace-nowrap">
+                        ${verifiable ? `<button onclick="checkUplink('${u.id}')" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">验证</button>` : ''}
+                        <button onclick="applyUplink('${u.id}')" class="text-xs text-emerald-600 hover:text-emerald-800 font-medium ml-3">重新下发</button>
+                        <button onclick="deleteUplink('${u.id}', '${escapeHtml(u.name)}')" class="text-xs text-red-500 hover:text-red-700 font-medium ml-3">删除</button>
+                    </td>`;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function addUplink(event) {
+            event.preventDefault();
+            let body = {
+                name: document.getElementById('uplink-name').value.trim(),
+                gateway: document.getElementById('uplink-gateway').value.trim(),
+                interface: document.getElementById('uplink-iface').value.trim(),
+            };
+            try {
+                let res = await fetch('/api/uplinks', {method: 'POST', body: JSON.stringify(body)});
+                let text = await res.text();
+                if (!res.ok) { alert('新增失败: ' + text); return; }
+                let data = JSON.parse(text);
+                if (data.status === 'error') {
+                    // 线路已经进了台账但没下发成功，列表里能看到它和错误原因
+                    alert('线路已保存，但下发到内核失败:\n' + data.error);
+                }
+                document.getElementById('add-uplink-form').reset();
+                loadUplinks();
+                loadCapability();
+            } catch (err) {
+                alert('新增失败: ' + err);
+            }
+        }
+
+        async function applyUplink(id) {
+            try {
+                let res = await fetch('/api/uplinks/apply', {method: 'POST', body: JSON.stringify({id})});
+                let text = await res.text();
+                if (!res.ok) { alert('下发失败: ' + text); }
+                else {
+                    let data = JSON.parse(text);
+                    if (data.status === 'error') alert('下发失败:\n' + data.error);
+                }
+            } catch (err) {
+                alert('下发失败: ' + err);
+            }
+            loadUplinks();
+            loadCapability();
+        }
+
+        async function deleteUplink(id, name) {
+            if (!confirm(`确定删除出口线路「${name}」？绑定了它的代理实例将无法启动。`)) return;
+            try {
+                let res = await fetch('/api/uplinks?id=' + encodeURIComponent(id), {method: 'DELETE'});
+                if (!res.ok) alert('删除失败: ' + await res.text());
+            } catch (err) {
+                alert('删除失败: ' + err);
+            }
+            loadUplinks();
+        }
+
+        // 问内核"打了这条线路标记的流量你会送到哪儿"。不联网、不发流量，
+        // 是唯一能区分同一网段两个网关的检查——公网 IP 探测在同 ISP 时分不出来。
+        async function checkUplink(id) {
+            try {
+                let d = await (await fetch('/api/uplinks/check?id=' + encodeURIComponent(id))).json();
+                let r = d.result || {};
+                if (d.ok) {
+                    alert(`验证通过\n\n内核会把本线路的流量送往:\n  网关 ${r.via || '（直连）'}\n  网卡 ${r.dev || '-'}\n  源地址 ${r.src || '-'}\n\n原始输出:\n${r.raw || ''}`);
+                } else {
+                    alert(`验证未通过\n\n${d.error}\n\n原始输出:\n${r.raw || '（无）'}`);
+                }
+            } catch (err) {
+                alert('验证失败: ' + err);
+            }
+        }
+
+        async function loadUplinkKernel() {
+            let box = document.getElementById('uplink-kernel');
+            if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+            box.classList.remove('hidden');
+            box.textContent = '正在读取...';
+            try {
+                let d = await (await fetch('/api/uplinks/kernel')).json();
+                // macOS 读的是 PF anchor，Linux 读的是 ip rule，命令行提示要对得上
+                let cmd = d.platform === 'darwin'
+                    ? '# pfctl -a com.apple/nettool -s rules'
+                    : '# ip rule show';
+                let out = [];
+                if (d.note) out.push(d.note, '');
+                if (d.rules_error) out.push('读取失败: ' + d.rules_error);
+                if (d.rules) out.push(cmd, ...d.rules);
+                Object.keys(d.tables || {}).sort().forEach(t => {
+                    out.push('', `# ip route show table ${t}`, ...d.tables[t]);
+                });
+                box.textContent = out.join('\n');
+            } catch (err) {
+                box.textContent = '读取失败: ' + err;
+            }
+        }
+
         // Initial load
         let savedTab = null;
         try { savedTab = localStorage.getItem('nettool-active-tab'); } catch (err) { /* 隐私模式下忽略 */ }
         switchTab(TABS.includes(savedTab) ? savedTab : 'proxy');
         loadStatus();
+        loadCapability(); // 能力横幅横跨所有标签页，一进来就要知道本机能做到什么
 
         // 仅在代理标签页可见时刷新连接数据
         setInterval(() => {
