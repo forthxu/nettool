@@ -36,6 +36,10 @@ var Monitor = &Watcher{}
 
 // Status 汇总当前 Wi-Fi 与最近一次切换，供接口输出
 func (w *Watcher) Status() map[string]interface{} {
+	// 先问配置档，别在持有 w.mu 时再去拿 ProfileStore 的锁——
+	// 两把锁一旦嵌套，以后有人反着写就是死锁
+	unbound := Profiles.unboundCount()
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -54,6 +58,10 @@ func (w *Watcher) Status() map[string]interface{} {
 		"checked_at":             nil,
 		// 已经检测到换网、但后台轮询还没来得及处理
 		"pending_switch": w.interval > 0 && !w.current.empty() && w.current.key() != w.acted,
+		// 系统能不能读到 SSID。读不到时只能靠指纹匹配，那些只记了 SSID 的配置档
+		// 永远匹配不上——界面要拿这两个字段把话说清楚
+		"ssid_readable":    w.current.empty() || w.current.SSID != "",
+		"unbound_profiles": unbound,
 	}
 	if !w.checkedAt.IsZero() {
 		m["checked_at"] = w.checkedAt
@@ -166,11 +174,20 @@ func checkWiFiWith(id wifiIdentity, mode CheckMode) {
 	}
 	log.Printf("[WiFi] 当前 Wi-Fi: %s（上一次: %s）", id.label(), netutil.OrDash(prev))
 
-	p, ok := Profiles.match(id)
-	if !ok {
+	p, kind := Profiles.matchDetail(id)
+	if kind == matchNone {
 		Monitor.recordSwitch(SwitchRecord{SSID: id.label(), Detail: "没有匹配的配置档，未做改动", OK: true})
 		Monitor.markActed(id.key())
 		return
+	}
+	// 命中默认档说明这个网络没有专属配置。系统不给读 SSID 时这几乎必然发生
+	// （配置档只记了 SSID，而我们手上只有指纹），表现出来就是"每个 Wi-Fi 套的
+	// 都是同一份配置、第二次开始还因为配置没变而被跳过"。必须说出来。
+	if kind == matchDefault && id.SSID == "" {
+		if n := Profiles.unboundCount(); n > 0 {
+			log.Printf("[WiFi] 系统未提供 SSID，只能按指纹匹配；有 %d 份配置档只记了 SSID、没绑指纹，"+
+				"它们永远匹配不到任何网络。请在该 Wi-Fi 下点对应配置档的「立即应用」，会自动绑上指纹", n)
+		}
 	}
 	if err := applyProfile(p, false); err != nil {
 		// 下发失败就不记成已处理，下一轮再试一次（网卡刚连上时偶尔会失败）
@@ -179,11 +196,22 @@ func checkWiFiWith(id wifiIdentity, mode CheckMode) {
 	Monitor.markActed(id.key())
 }
 
-// ApplyProfileForSSID 按名字找到配置档并下发，供界面「立即应用」使用
+// ApplyProfileForSSID 按名字找到配置档并下发，供界面「立即应用」使用。
+//
+// 顺手把当前网络的指纹绑到这份配置档上：用户点「立即应用」就等于明说"这份配置
+// 对应我现在连的这个 Wi-Fi"。系统不给读 SSID 时（macOS 14 起的隐私限制）这是
+// 唯一能把配置档和网络对上的时机，不绑的话之后的自动切换永远认不出它。
 func ApplyProfileForSSID(ssid string, force bool) error {
 	p, ok := Profiles.Get(ssid)
 	if !ok {
 		return fmt.Errorf("Wi-Fi %q 没有对应的配置档", ssid)
+	}
+	if id := Monitor.identity(); id.SSID == "" && id.NetworkID != "" {
+		if Profiles.bindNetworkID(ssid, id.NetworkID) {
+			log.Printf("[WiFi] 已把当前网络的指纹 %s 绑到配置档「%s」，之后能自动匹配到它",
+				shortID(id.NetworkID), ssid)
+			p, _ = Profiles.Get(ssid)
+		}
 	}
 	return applyProfile(p, force)
 }

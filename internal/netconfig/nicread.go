@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -147,7 +146,7 @@ func parseMacDNSServers(out string) []string {
 }
 
 func darwinNICs() ([]NIC, error) {
-	out, err := exec.Command("networksetup", "-listnetworkserviceorder").CombinedOutput()
+	out, err := runCombined("networksetup", "-listnetworkserviceorder")
 	if err != nil {
 		return nil, fmt.Errorf("读取网络服务列表失败: %s", strings.TrimSpace(string(out)))
 	}
@@ -165,7 +164,7 @@ func darwinNICs() ([]NIC, error) {
 			Disabled: svc.Disabled,
 		}
 
-		infoOut, err := exec.Command("networksetup", "-getinfo", svc.Service).CombinedOutput()
+		infoOut, err := runCombined("networksetup", "-getinfo", svc.Service)
 		if err != nil {
 			cfg.Error = strings.TrimSpace(string(infoOut))
 		} else {
@@ -173,7 +172,7 @@ func darwinNICs() ([]NIC, error) {
 			cfg.Method, cfg.IP, cfg.Mask, cfg.Gateway, cfg.Active = parsed.Method, parsed.IP, parsed.Mask, parsed.Gateway, parsed.Active
 		}
 
-		if dnsOut, err := exec.Command("networksetup", "-getdnsservers", svc.Service).CombinedOutput(); err == nil {
+		if dnsOut, err := runCombined("networksetup", "-getdnsservers", svc.Service); err == nil {
 			cfg.DNS = parseMacDNSServers(string(dnsOut))
 		}
 		if cfg.Type == "wifi" && cfg.Active {
@@ -304,21 +303,21 @@ func linuxNICs() ([]NIC, error) {
 }
 
 func nmcliNICs() ([]NIC, error) {
-	out, err := exec.Command("nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status").CombinedOutput()
+	out, err := runCombined("nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status")
 	if err != nil {
 		return nil, fmt.Errorf("读取网卡列表失败（本功能依赖 NetworkManager 的 nmcli）: %s", strings.TrimSpace(string(out)))
 	}
 
 	list := parseNmcliDeviceStatus(string(out))
 	for i := range list {
-		if showOut, err := exec.Command("nmcli", "-t", "-f", "IP4.ADDRESS,IP4.GATEWAY,IP4.DNS", "device", "show", list[i].Device).CombinedOutput(); err == nil {
+		if showOut, err := runCombined("nmcli", "-t", "-f", "IP4.ADDRESS,IP4.GATEWAY,IP4.DNS", "device", "show", list[i].Device); err == nil {
 			d := parseNmcliDeviceShow(string(showOut))
 			list[i].IP, list[i].Mask, list[i].Gateway, list[i].DNS = d.IP, d.Mask, d.Gateway, d.DNS
 		}
 		if list[i].Service == "" {
 			continue
 		}
-		if mOut, err := exec.Command("nmcli", "-t", "-f", "ipv4.method", "connection", "show", list[i].Service).CombinedOutput(); err == nil {
+		if mOut, err := runCombined("nmcli", "-t", "-f", "ipv4.method", "connection", "show", list[i].Service); err == nil {
 			switch strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(mOut)), "ipv4.method:")) {
 			case "auto":
 				list[i].Method = "dhcp"
@@ -432,14 +431,14 @@ func windowsNICs() ([]NIC, error) {
 
 // windowsNetshNICs 是老系统上的回落路径（Get-Net* 系列要 Windows 8 / Server 2012 起才有）
 func windowsNetshNICs() ([]NIC, error) {
-	out, err := exec.Command("netsh", "interface", "ip", "show", "config").CombinedOutput()
+	out, err := runCombined("netsh", "interface", "ip", "show", "config")
 	if err != nil {
 		return nil, fmt.Errorf("读取网卡配置失败: %s", strings.TrimSpace(string(out)))
 	}
 	list := parseNetshInterfaceConfig(string(out))
 
 	ssid, _, _ := currentSSID()
-	if wlanOut, err := exec.Command("netsh", "wlan", "show", "interfaces").CombinedOutput(); err == nil {
+	if wlanOut, err := runCombined("netsh", "wlan", "show", "interfaces"); err == nil {
 		name := parseNetshWlanInterfaceName(string(wlanOut))
 		for i := range list {
 			if name != "" && strings.EqualFold(list[i].Device, name) {

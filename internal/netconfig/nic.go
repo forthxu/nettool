@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -306,8 +305,7 @@ func Apply(t Target, s Settings) error {
 	}
 	for _, args := range cmds {
 		log.Printf("[NetConfig] 执行: %s", strings.Join(args, " "))
-		out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
-		text := strings.TrimSpace(string(out))
+		text, err := runCombined(args[0], args[1:]...)
 		if err != nil {
 			if text == "" {
 				text = err.Error()

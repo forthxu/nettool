@@ -56,7 +56,7 @@ type ubusInterface struct {
 }
 
 func uciNICs() ([]NIC, error) {
-	out, err := exec.Command("ubus", "call", "network.interface", "dump").Output()
+	out, err := runOut("ubus", "call", "network.interface", "dump")
 	if err != nil {
 		return nil, fmt.Errorf("读取网卡列表失败（OpenWrt 上依赖 ubus/netifd）: %v", err)
 	}
@@ -233,7 +233,7 @@ func parseIwinfoSSID(out string) string {
 // uciCurrentSSID 在 OpenWrt 上读当前关联的 Wi-Fi 名字。
 // 只有路由器自己作为客户端（中继 / apcli）接入时才有意义，做 AP 时读不到属正常。
 func uciCurrentSSID() (string, error) {
-	out, err := exec.Command("iwinfo").Output()
+	out, err := runOut("iwinfo")
 	if err != nil {
 		return "", fmt.Errorf("读取 SSID 失败（OpenWrt 上依赖 iwinfo）: %v", err)
 	}

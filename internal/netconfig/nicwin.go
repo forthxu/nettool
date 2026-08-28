@@ -12,10 +12,8 @@ package netconfig
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
-	"os/exec"
 	"strings"
 )
 
@@ -86,18 +84,9 @@ func (f *flexStrings) UnmarshalJSON(b []byte) error {
 // runPowerShell 执行一段脚本并返回标准输出。用 Output 而不是 CombinedOutput，
 // 免得警告信息混进 JSON 里。
 func runPowerShell(script string) (string, error) {
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
-	out, err := cmd.Output()
+	out, err := runOut("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	if err != nil {
-		detail := strings.TrimSpace(string(out))
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			detail = strings.TrimSpace(string(ee.Stderr))
-		}
-		if detail == "" {
-			detail = err.Error()
-		}
-		return "", fmt.Errorf("%s", detail)
+		return "", err
 	}
 	return string(out), nil
 }

@@ -138,11 +138,30 @@ func (s *ProfileStore) Get(ssid string) (Profile, bool) {
 	return p, ok
 }
 
-// match 找出当前 Wi-Fi 对应的配置档：优先按 SSID 精确匹配，
-// SSID 读不到（或没记 SSID）时退回按系统给的网络指纹匹配。
+// matchKind 说明一份配置档是"怎么"被选中的。调用方需要区分它们：
+// 按指纹或 SSID 命中的是"这个网络专属的配置"，而 matchDefault 只是兜底——
+// 所有没单独配置的 Wi-Fi 都会落到同一份默认档上，看起来像"自动切换不工作了"。
+type matchKind int
+
+const (
+	matchNone        matchKind = iota // 没有任何配置档可用
+	matchSSID                         // 按 SSID 精确命中
+	matchFingerprint                  // 按系统给的网络指纹命中
+	matchDefault                      // 都没命中，用的是兜底的默认档
+)
+
+// match 找出当前 Wi-Fi 对应的配置档
 func (s *ProfileStore) match(id wifiIdentity) (Profile, bool) {
+	p, kind := s.matchDetail(id)
+	return p, kind != matchNone
+}
+
+// matchDetail 找出当前 Wi-Fi 对应的配置档，并说明是怎么命中的：
+// 优先按 SSID 精确匹配，SSID 读不到（或没记 SSID）时按系统给的网络指纹匹配，
+// 都对不上才退到默认档。
+func (s *ProfileStore) matchDetail(id wifiIdentity) (Profile, matchKind) {
 	if id.empty() {
-		return Profile{}, false // 没连 Wi-Fi 就不该套用任何配置档，默认档也不行
+		return Profile{}, matchNone // 没连 Wi-Fi 就不该套用任何配置档，默认档也不行
 	}
 
 	s.mu.Lock()
@@ -150,18 +169,57 @@ func (s *ProfileStore) match(id wifiIdentity) (Profile, bool) {
 
 	if id.SSID != "" {
 		if p, ok := s.profiles[id.SSID]; ok {
-			return p, true
+			return p, matchSSID
 		}
 	}
 	if id.NetworkID != "" {
 		for _, p := range s.listLocked() {
 			if p.NetworkID == id.NetworkID {
-				return p, true
+				return p, matchFingerprint
 			}
 		}
 	}
 	// 都对不上就用默认档（"其他 Wi-Fi"），没有默认档才算真的没匹配
-	return s.defaultProfileLocked()
+	if p, ok := s.defaultProfileLocked(); ok {
+		return p, matchDefault
+	}
+	return Profile{}, matchNone
+}
+
+// unboundCount 数一数有多少份"只认 SSID、没绑指纹"的配置档。
+//
+// 这个数字只在系统不给读 SSID 时才有意义（macOS 14 起的隐私限制）：那种情况下
+// 这些配置档**永远匹配不到任何网络**，所有 Wi-Fi 都会落到默认档上，表现出来就是
+// "自动切换只生效了一次，之后再也不动"。界面据此给出提示。
+func (s *ProfileStore) unboundCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, p := range s.profiles {
+		if !p.IsDefault && p.NetworkID == "" {
+			n++
+		}
+	}
+	return n
+}
+
+// bindNetworkID 把系统给的网络指纹记到某份配置档上，让它之后能被自动匹配到。
+// 已经绑过别的指纹就不动——那是用户自己绑的，不该被覆盖。
+func (s *ProfileStore) bindNetworkID(ssid, networkID string) bool {
+	if ssid == "" || networkID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.profiles[ssid]
+	if !ok || p.IsDefault || p.NetworkID != "" {
+		return false
+	}
+	p.NetworkID = networkID
+	p.UpdatedAt = time.Now()
+	s.profiles[ssid] = p
+	s.persistLocked()
+	return true
 }
 
 // defaultProfileLocked 调用方必须已持有 s.mu

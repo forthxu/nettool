@@ -5,7 +5,6 @@ package netconfig
 
 import (
 	"fmt"
-	"os/exec"
 	"runtime"
 	"strings"
 )
@@ -56,12 +55,12 @@ func currentWiFi() wifiIdentity {
 	case "darwin":
 		id := wifiIdentity{}
 		for _, dev := range wifiDevices() {
-			if out, e := exec.Command("networksetup", "-getairportnetwork", dev).CombinedOutput(); e == nil {
+			if out, e := runCombined("networksetup", "-getairportnetwork", dev); e == nil {
 				if s := parseAirportNetwork(string(out)); s != "" && s != ssidRedacted {
 					return wifiIdentity{SSID: s, Source: "networksetup -getairportnetwork " + dev}
 				}
 			}
-			if out, e := exec.Command("ipconfig", "getsummary", dev).CombinedOutput(); e == nil {
+			if out, e := runCombined("ipconfig", "getsummary", dev); e == nil {
 				if s := parseIpconfigSummarySSID(string(out)); s != "" && s != ssidRedacted {
 					return wifiIdentity{SSID: s, Source: "ipconfig getsummary " + dev}
 				}
@@ -79,7 +78,7 @@ func currentWiFi() wifiIdentity {
 			}
 		}
 		// wdutil 需要 root，作为最后一档
-		if out, e := exec.Command("wdutil", "info").CombinedOutput(); e == nil {
+		if out, e := runCombined("wdutil", "info"); e == nil {
 			if s := parseWdutilSSID(string(out)); s != "" && s != ssidRedacted {
 				return wifiIdentity{SSID: s, Source: "wdutil info"}
 			}
@@ -98,13 +97,11 @@ func currentWiFi() wifiIdentity {
 // darwinAirPortState 从 SCDynamicStore 里读 Wi-Fi 状态：
 // SSID_STR 在没有定位权限时是空的，但 ProfileID 一直可读。
 func darwinAirPortState(dev string) (ssid, profileID string) {
-	cmd := exec.Command("scutil")
-	cmd.Stdin = strings.NewReader("show State:/Network/Interface/" + dev + "/AirPort\n")
-	out, err := cmd.Output()
+	out, err := runStdin("show State:/Network/Interface/"+dev+"/AirPort\n", "scutil")
 	if err != nil {
 		return "", ""
 	}
-	return parseScutilAirPort(string(out))
+	return parseScutilAirPort(out)
 }
 
 // parseScutilAirPort 解析 scutil 的 AirPort 字典
@@ -143,7 +140,7 @@ func currentSSID() (ssid string, source string, err error) {
 			}
 			return ssid, "iwinfo", nil
 		}
-		out, e := exec.Command("nmcli", "-t", "-f", "ACTIVE,SSID", "device", "wifi").CombinedOutput()
+		out, e := runCombined("nmcli", "-t", "-f", "ACTIVE,SSID", "device", "wifi")
 		if e != nil {
 			return "", "", fmt.Errorf("读取 SSID 失败: %s", strings.TrimSpace(string(out)))
 		}
@@ -162,7 +159,7 @@ func currentSSID() (ssid string, source string, err error) {
 			return "", "", fmt.Errorf("未检测到已连接的 Wi-Fi")
 		}
 
-		out, e := exec.Command("netsh", "wlan", "show", "interfaces").CombinedOutput()
+		out, e := runCombined("netsh", "wlan", "show", "interfaces")
 		if e != nil {
 			return "", "", fmt.Errorf("读取 SSID 失败: %s", strings.TrimSpace(string(out)))
 		}
@@ -176,7 +173,7 @@ func currentSSID() (ssid string, source string, err error) {
 
 // wifiDevices 列出 macOS 上的 Wi-Fi 网卡设备名（en0 / en7 因机型而异）
 func wifiDevices() []string {
-	out, err := exec.Command("networksetup", "-listnetworkserviceorder").CombinedOutput()
+	out, err := runCombined("networksetup", "-listnetworkserviceorder")
 	if err != nil {
 		return []string{"en0"}
 	}

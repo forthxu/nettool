@@ -778,3 +778,67 @@ func TestWiFiObservePollDoesNotSwallowSwitch(t *testing.T) {
 		t.Error("未连接 Wi-Fi 时不应处理")
 	}
 }
+
+// 回归：macOS 14 起系统默认不给读 SSID（本机实测 scutil 的 SSID_STR 是空的，
+// 只有 ProfileID 可读）。这时"只记了 SSID、没绑指纹"的配置档**永远匹配不到**，
+// 所有 Wi-Fi 都会落到默认档上——用户看到的就是"自动切换第一次生效，之后不生效"：
+// 第二个网络套的是同一份默认档，配置没变于是被跳过。
+func TestFingerprintOnlyNetworkCannotMatchSSIDProfile(t *testing.T) {
+	s := &ProfileStore{profiles: make(map[string]Profile)}
+	s.profiles["家里WiFi"] = Profile{SSID: "家里WiFi", Service: "Wi-Fi", Enabled: true}
+	s.profiles["其他 Wi-Fi"] = Profile{SSID: "其他 Wi-Fi", Service: "Wi-Fi", Enabled: true, IsDefault: true}
+
+	home := wifiIdentity{NetworkID: "fp-home"}
+	cafe := wifiIdentity{NetworkID: "fp-cafe"}
+
+	// 两个不同的网络都只能落到默认档上，这就是故障现象的成因
+	for _, id := range []wifiIdentity{home, cafe} {
+		p, kind := s.matchDetail(id)
+		if kind != matchDefault {
+			t.Fatalf("%s 应当只能命中默认档，实际 kind=%d", id.label(), kind)
+		}
+		if !p.IsDefault {
+			t.Fatalf("%s 命中的应当是默认档", id.label())
+		}
+	}
+	if n := s.unboundCount(); n != 1 {
+		t.Errorf("应当数出 1 份没绑指纹的配置档，实际 %d", n)
+	}
+
+	// 绑上指纹之后就能被认出来了——这正是「立即应用」顺手做的事
+	if !s.bindNetworkID("家里WiFi", "fp-home") {
+		t.Fatal("应当能把指纹绑到配置档上")
+	}
+	p, kind := s.matchDetail(home)
+	if kind != matchFingerprint || p.SSID != "家里WiFi" {
+		t.Errorf("绑过指纹后应按指纹命中「家里WiFi」，实际 kind=%d ssid=%q", kind, p.SSID)
+	}
+	// 别的网络仍然走默认档，绑定不应波及它
+	if _, kind := s.matchDetail(cafe); kind != matchDefault {
+		t.Errorf("未绑定的网络仍应走默认档，实际 kind=%d", kind)
+	}
+	if n := s.unboundCount(); n != 0 {
+		t.Errorf("绑定后不该再有未绑指纹的配置档，实际 %d", n)
+	}
+}
+
+// bindNetworkID 不能覆盖用户自己绑的指纹，也不该往默认档上绑——
+// 默认档是兜底的，绑死到某个网络上就再也兜不住别的网络了
+func TestBindNetworkIDRefusesOverwriteAndDefault(t *testing.T) {
+	s := &ProfileStore{profiles: make(map[string]Profile)}
+	s.profiles["公司"] = Profile{SSID: "公司", NetworkID: "fp-old", Service: "Wi-Fi"}
+	s.profiles["其他 Wi-Fi"] = Profile{SSID: "其他 Wi-Fi", Service: "Wi-Fi", IsDefault: true}
+
+	if s.bindNetworkID("公司", "fp-new") {
+		t.Error("已经绑过指纹的配置档不该被覆盖")
+	}
+	if got := s.profiles["公司"].NetworkID; got != "fp-old" {
+		t.Errorf("原指纹被改成了 %q", got)
+	}
+	if s.bindNetworkID("其他 Wi-Fi", "fp-any") {
+		t.Error("默认档不该被绑到某个具体网络上")
+	}
+	if s.bindNetworkID("不存在", "fp-any") {
+		t.Error("不存在的配置档不该返回成功")
+	}
+}
