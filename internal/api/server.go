@@ -28,12 +28,20 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("/api/routes/pause", handlePauseRoutes)
 	mux.HandleFunc("/api/system-routes", handleSystemRoutes)
 
+	// 出口线路（策略路由）与本机能力自陈
+	mux.HandleFunc("/api/uplinks", handleUplinks)
+	mux.HandleFunc("/api/uplinks/apply", handleUplinkApply)
+	mux.HandleFunc("/api/uplinks/check", handleUplinkCheck)
+	mux.HandleFunc("/api/uplinks/kernel", handleUplinkKernel)
+	mux.HandleFunc("/api/capabilities", handleCapabilities)
+
 	// SOCKS5 代理
 	mux.HandleFunc("/api/interfaces", handleInterfaces)
 	mux.HandleFunc("/api/egress-ip", handleEgressIP)
 	mux.HandleFunc("/api/stats", handleStats)
 	mux.HandleFunc("/api/status", handleStatus)
 	mux.HandleFunc("/api/proxy", handleProxyPower)
+	mux.HandleFunc("/api/proxy/instances", handleProxyInstances)
 
 	// 网卡配置与 Wi-Fi 配置档
 	mux.HandleFunc("/api/net/interfaces", handleNetInterfaces)

@@ -22,17 +22,24 @@ type ConnectionInfo struct {
 	StartTime  time.Time `json:"start_time"`
 }
 
+// StatsManager 是一个代理实例的统计口径。每个实例一份：多实例共用一份的话，
+// 连接数、流量会混在一起，SetTarget 更会串台（见下）。
 type StatsManager struct {
 	mu                sync.Mutex
 	totalBytesIn      int64
 	totalBytesOut     int64
 	totalConnections  int64
 	activeConnections map[string]*ConnectionInfo
+	// byClient 按客户端地址索引，供 SetTarget 回填目标用。
+	// 同一个客户端地址同时只可能有一条活跃连接（四元组唯一），新的覆盖旧的。
+	byClient map[string]*ConnectionInfo
 }
 
-// Stats 是全局唯一的统计口径，进程整个生命周期内累加，代理重启不清零
-var Stats = &StatsManager{
-	activeConnections: make(map[string]*ConnectionInfo),
+func newStats() *StatsManager {
+	return &StatsManager{
+		activeConnections: make(map[string]*ConnectionInfo),
+		byClient:          make(map[string]*ConnectionInfo),
+	}
 }
 
 func (s *StatsManager) AddConnection(id, client, target string) *ConnectionInfo {
@@ -47,25 +54,33 @@ func (s *StatsManager) AddConnection(id, client, target string) *ConnectionInfo 
 		StartTime:  time.Now(),
 	}
 	s.activeConnections[id] = conn
+	s.byClient[client] = conn
 	return conn
 }
 
 // SetTarget 按客户端地址回填这条连接的目标。Accept 的时候还不知道客户端要连哪儿，
 // 要等 SOCKS5 握手把目标发过来才知道，那时只能靠客户端地址对上号。
+//
+// 走索引而不是线性扫：早先那版扫的是全局 map 里第一个地址相符的连接，客户端
+// 临时端口被复用时会命中一条陈旧连接，多实例下更会把目标写到别的实例的连接上。
 func (s *StatsManager) SetTarget(clientAddr, target string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, c := range s.activeConnections {
-		if c.ClientAddr == clientAddr {
-			c.TargetAddr = target
-			return
-		}
+	if c, ok := s.byClient[clientAddr]; ok {
+		c.TargetAddr = target
 	}
 }
 
 func (s *StatsManager) RemoveConnection(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if c, ok := s.activeConnections[id]; ok {
+		// 只在索引仍指向自己时才删：同一个客户端地址已经被新连接占用的话，
+		// 删掉会让新连接的目标再也回填不上
+		if cur, ok := s.byClient[c.ClientAddr]; ok && cur == c {
+			delete(s.byClient, c.ClientAddr)
+		}
+	}
 	delete(s.activeConnections, id)
 }
 
@@ -110,6 +125,7 @@ func (s *StatsManager) Snapshot() map[string]interface{} {
 type MonitoredConn struct {
 	net.Conn
 	info  *ConnectionInfo
+	stats *StatsManager  // 所属实例的统计口径
 	owner *statsListener // 停止代理时用来主动断开这条隧道
 }
 
@@ -120,7 +136,7 @@ func (mc *MonitoredConn) Read(b []byte) (int, error) {
 	n, err := mc.Conn.Read(b)
 	if n > 0 {
 		atomic.AddInt64(&mc.info.BytesOut, int64(n))
-		Stats.AddBytes(0, int64(n))
+		mc.stats.AddBytes(0, int64(n))
 	}
 	return n, err
 }
@@ -129,13 +145,13 @@ func (mc *MonitoredConn) Write(b []byte) (int, error) {
 	n, err := mc.Conn.Write(b)
 	if n > 0 {
 		atomic.AddInt64(&mc.info.BytesIn, int64(n))
-		Stats.AddBytes(int64(n), 0)
+		mc.stats.AddBytes(int64(n), 0)
 	}
 	return n, err
 }
 
 func (mc *MonitoredConn) Close() error {
-	Stats.RemoveConnection(mc.info.ID)
+	mc.stats.RemoveConnection(mc.info.ID)
 	if mc.owner != nil {
 		mc.owner.forget(mc)
 	}
@@ -146,6 +162,7 @@ func (mc *MonitoredConn) Close() error {
 type statsListener struct {
 	net.Listener
 	connCounter *int64
+	stats       *StatsManager
 
 	mu     sync.Mutex
 	conns  map[*MonitoredConn]struct{}
@@ -160,8 +177,8 @@ func (sl *statsListener) Accept() (net.Conn, error) {
 
 	id := fmt.Sprintf("conn-%d", atomic.AddInt64(sl.connCounter, 1))
 	clientAddr := c.RemoteAddr().String()
-	info := Stats.AddConnection(id, clientAddr, "握手中…")
-	mc := &MonitoredConn{Conn: c, info: info, owner: sl}
+	info := sl.stats.AddConnection(id, clientAddr, "握手中…")
+	mc := &MonitoredConn{Conn: c, info: info, stats: sl.stats, owner: sl}
 
 	sl.mu.Lock()
 	if sl.closed {

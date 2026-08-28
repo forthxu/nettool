@@ -11,24 +11,35 @@ import (
 	"time"
 
 	"github.com/armon/go-socks5"
+
+	"nettool/internal/sockopt"
 )
 
 // resolver 让代理自己按指定的上游 DNS 解析域名，而且查询本身也从绑定的
-// 出口 IP 发出去——这才是关键：客户端用 --socks5-hostname 时域名是交给代理解析的，
+// 出口发出去——这才是关键：客户端用 --socks5-hostname 时域名是交给代理解析的，
 // 如果代理还用系统 DNS（在被污染的网络里），拿到的就是假地址，哪怕流量出口在国外
 // 也连不上。留空则维持系统解析。
 type resolver struct {
-	dns        string // host:port
-	outboundIP net.IP
+	dns string // host:port
+	// egress 是所属实例的出口约束。DNS 查询也必须照样施加——漏了的话域名解析会
+	// 从默认网关出去，而数据连接走的是指定线路，既泄漏了查询、解析结果也可能不对。
+	//
+	// macOS 的 PF 模式下这一点尤其容易漏：查询走的是 UDP:53，而 PF 规则是按
+	// 源端口段匹配的，UDP socket 不绑段内端口就匹配不上。sockopt.Dialer 会按
+	// network 给出正确类型的 LocalAddr，renderPFRules 也为 UDP 单独写了一条规则。
+	egress sockopt.Egress
 }
 
 func (r *resolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
 	res := net.DefaultResolver
 	if r.dns != "" {
+		d, err := sockopt.NewDialer(r.egress, net.Dialer{Timeout: 5 * time.Second})
+		if err != nil {
+			return ctx, nil, fmt.Errorf("解析 %s 失败: 出口配置不可用: %v", name, err)
+		}
 		res = &net.Resolver{
 			PreferGo: true,
 			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				d := &net.Dialer{Timeout: 5 * time.Second, LocalAddr: dnsLocalAddr(network, r.outboundIP)}
 				return d.DialContext(ctx, network, r.dns)
 			},
 		}
@@ -47,17 +58,6 @@ func (r *resolver) Resolve(ctx context.Context, name string) (context.Context, n
 		return ctx, ips6[0], nil
 	}
 	return ctx, ips[0], nil
-}
-
-// dnsLocalAddr 把 DNS 查询也绑到出口 IP 上，UDP 和 TCP 要用各自的地址类型
-func dnsLocalAddr(network string, ip net.IP) net.Addr {
-	if ip == nil {
-		return nil
-	}
-	if strings.HasPrefix(network, "udp") {
-		return &net.UDPAddr{IP: ip}
-	}
-	return &net.TCPAddr{IP: ip}
 }
 
 // NormalizeDNSAddr 允许只填 IP，自动补 :53
@@ -79,11 +79,12 @@ func NormalizeDNSAddr(dns string) (string, error) {
 // go-socks5 不会把请求目标透给 listener，只有这里能同时拿到客户端地址和目标地址。
 type targetRecorder struct {
 	inner socks5.RuleSet
+	stats *StatsManager // 所属实例的统计口径，不能写到别的实例的连接上
 }
 
 func (t *targetRecorder) Allow(ctx context.Context, req *socks5.Request) (context.Context, bool) {
 	if req != nil && req.RemoteAddr != nil && req.DestAddr != nil {
-		Stats.SetTarget(req.RemoteAddr.Address(), describeTarget(req.DestAddr))
+		t.stats.SetTarget(req.RemoteAddr.Address(), describeTarget(req.DestAddr))
 	}
 	return t.inner.Allow(ctx, req)
 }

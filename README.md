@@ -9,8 +9,8 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 
 | 页签 | 干什么 | 主要接口 |
 | --- | --- | --- |
-| **SOCKS5 代理** | 随时启停的 SOCKS5 代理，外发流量绑定到指定网卡 IP（也就是指定走哪个路由器），实时看连接与流量 | `/api/status`、`/api/proxy`、`/api/stats`、`/api/egress-ip`、`/api/interfaces` |
-| **路由管理** | 按网段或域名下发系统路由指向某个网关，带台账、启动对账、定时重解析、暂停/恢复 | `/api/routes*`、`/api/system-routes` |
+| **SOCKS5 代理** | **多个** SOCKS5 实例，各自监听不同端口、绑定不同的**出口线路**（即各走各的网关，由路由决定而非绑源 IP），实时看连接与流量 | `/api/proxy/instances`、`/api/status`、`/api/proxy`、`/api/stats`、`/api/egress-ip`、`/api/interfaces` |
+| **路由管理** | 上半部分是**出口线路**（决定某个代理实例走哪个网关：Linux 策略路由 / macOS PF route-to）；下半部分按网段或域名下发系统路由指向某个网关，带台账、启动对账、定时重解析、暂停/恢复 | `/api/uplinks*`、`/api/capabilities`、`/api/routes*`、`/api/system-routes` |
 | **网卡配置** | 改本机网卡的 IP / 掩码 / 网关 / DNS，并按连上的 Wi-Fi 自动套用配置档 | `/api/net/*` |
 | **DNS 服务** | 本机 DNS 解析器：UDP/TCP/DoT/DoH 上游、按域名分流、缓存、静态记录 | `/api/dns*` |
 | **Ping** | ICMP 连通性测试，可指定源 IP —— 同一个目标换条线路试，结果一目了然 | `/api/diag/ping` |
@@ -22,7 +22,7 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 
 - **Web 后台登录认证**：`-user` / `-pass` 开启 HTTP Basic Auth，保护控制台与全部 API；两个都留空则不鉴权。
 - **按上次的状态启动**：SOCKS5 代理和 DNS 服务的开关状态跟着配置一起存盘，进程重启（升级、崩溃、机器重启）后照着上次退出前的样子恢复——上次开着就自动起来，上次点过「停止」就保持停止，不用每次再去后台点一次。全新安装（还没有配置文件）时两者都不启动，避免装好就抢端口；`-start-proxy` / `-start-dns` 则是无条件启动，不看上次状态。
-- **配置各自独立成 JSON**：路由台账、Wi-Fi 配置档、DNS 配置、代理配置四份文件互不干扰，一律先写临时文件再原子替换，掉电不会留下半个文件。
+- **配置各自独立成 JSON**：路由台账、出口线路台账、Wi-Fi 配置档、DNS 配置、代理配置五份文件互不干扰，一律先写临时文件再原子替换，掉电不会留下半个文件。
 - **系统服务模板**：`deploy/` 下有 Linux systemd、OpenWrt procd 与 Windows 计划任务三份配置，开机自启 + 崩溃自动重启。
 - **不认本地化文案**：Windows 的 `netsh` / `route` 输出跟着系统语言走（中文版打印的是「接口 xxx 的配置」「在链路上」），所以那边的读取一律走 PowerShell 的 `Get-Net*`（属性名与枚举值固定）或只认数据行的形状，中文系统上一样能用。
 
@@ -30,41 +30,167 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 
 ## 一、SOCKS5 代理
 
+### 多实例
+
+一个实例 = 一个监听端口 + 一条出口线路。要「8091 走电信、8092 走联通、8093 走第三个网关」，就建三个实例、各绑一条[出口线路](#二出口线路按实例选网关)。
+
+- 实例之间除了共用一份配置文件，运行时完全隔离：各有各的监听口、拨号器、DNS 解析器和流量统计。
+- 顶部四张统计卡是**全部实例的合计**；选中某个实例后，下面的配置卡与连接列表只针对它。
+- 端口撞车会直接说「端口 8091 已被实例「默认代理」占用」，而不是丢一句 `bind: address already in use`。
+- 接口：`GET/POST /api/proxy/instances`（列表 / 新建）、`DELETE /api/proxy/instances?id=pN`。改配置仍走 `POST /api/status`，带上 `id` 即可。
+
+> **从旧版本升级**：旧的 `proxy.json` 是单个扁平对象（v1），首次启动会自动迁移成 v2 的实例列表，端口 / 代理 DNS / 开关状态一个都不会丢，`outbound_ip` 会转成一条出口线路（见下），原文件备份为 `proxy.json.v1.bak`。`/api/status`、`/api/proxy`、`/api/stats`、`/api/egress-ip` 这几个老接口全部保留，不带 `id` 时作用于第一个实例，原有脚本不用改。
+
 ### 启停与状态
 
-- 程序启动后按**上次退出前的开关状态**恢复：上次是开着的就自动开始监听，上次点过「停止代理」就只加载配置、不监听。第一次运行（还没有 `proxy.json`）时不启动，在 Web 后台点「启动代理」即可，之后这个选择就会被记住。想无条件开机即启加 `-start-proxy`。
-- 端口、出口 IP、代理 DNS 也一并存在 `proxy.json` 里（默认与路由台账同目录，可用 `-proxy-config-file` 指定）。命令行 `-socks-port` / `-outbound-ip` / `-dns` 只在真填了的时候覆盖存档，留空则沿用上次的值。
+- 程序启动后各实例按**自己上次退出前的开关状态**恢复：上次是开着的就自动开始监听，上次点过「停止代理」就只加载配置、不监听。第一次运行（还没有 `proxy.json`）时不启动，在 Web 后台点「启动代理」即可，之后这个选择就会被记住。想无条件开机即启加 `-start-proxy`（作用于全部实例）。
+- 实例名、端口、出口线路、代理 DNS 都存在 `proxy.json` 里（默认与路由台账同目录，可用 `-proxy-config-file` 指定）。命令行 `-socks-port` / `-dns` 只在真填了的时候覆盖存档，且**只作用于第一个实例**——它们是单实例时代留下来的参数，多实例请走 Web 界面或接口。
 - 「停止代理」不只是关监听口，还会主动断开当前所有隧道连接——点了停止就是真的停，不会有残留连接继续跑流量。
-- 代理停止时仍可修改端口与出口 IP（保存后不会被动拉起，按钮文案相应变成「保存配置」）；代理运行中保存则自动带新配置重启（「保存并重启代理」）。
+- 实例停止时仍可修改端口与出口线路（保存后不会被动拉起，按钮文案相应变成「保存配置」）；实例运行中保存则自动带新配置重启（「保存并重启代理」）。
 - 界面显示运行状态、代理启动时刻与已运行时长（停止时为 `-`），以及不受代理开关影响的程序运行时长。
-- 接口：`POST /api/proxy {"action":"start"|"stop"}`；`GET /api/status` 返回 `running` / `proxy_state` / `started_at` / `uptime_seconds`。
+- 接口：`POST /api/proxy {"id":"pN","action":"start"|"stop"}`；`GET /api/status?id=pN` 返回 `running` / `proxy_state` / `started_at` / `uptime_seconds`，外加全部实例的 `instances` 列表。`id` 留空则作用于第一个实例。
 
 ### 流量统计与实时监控
 
-- 精确统计全局上下行流量、历史连接数，并提供 2 秒自动刷新的实时活跃连接监控仪表盘。
+- **按实例**统计上下行流量与历史连接数，并提供 2 秒自动刷新的实时活跃连接监控仪表盘；`GET /api/stats?id=pN` 另附 `totals` 字段给出全部实例的合计。
 - 每条连接显示**实际访问的目标**：客户端用 `--socks5-hostname` 交给代理解析时显示 `域名:端口 (解析到的IP)`，客户端本地解析后直接给 IP 时显示 `IP:端口`。目标是在 SOCKS5 握手时借 `RuleSet` 钩子按客户端地址回填的（Accept 那一刻还不知道要连哪儿），握手完成前显示「握手中…」。
 - 列表按连接建立时间排序，不会每 2 秒行序乱跳。
 
-### 出口网关强制绑定
+### 出口怎么定
 
-- 允许指定代理外发流量绑定的本地网卡 IP，强制经由指定路由器网关转发。
-- Web 后台自动读取本机可用网卡（网卡名、IP/掩码、对应网关）供下拉选择，并提供「刷新」按钮随时重新探测；亦可切换为「手动输入」填写任意 IP。
-- 网关按 **IP 逐个解析**而非按网卡：同一块网卡上的多个地址可能分属不同上游路由器（macOS 的多个网络服务 / Linux 的策略路由）。macOS 读取 `scutil` 中各网络服务的 `Router`，Linux 用 `ip route get <目标> from <本机IP>` 查询实际生效网关，Windows 从 `route print -4` 的活动路由表里按出口地址挑默认路由（同一地址有多条时取跃点数最小的）；取不到时回落到该网卡的默认路由。
-- ⚠️ 注意：显示的网关是系统对该地址配置的上游路由器。在 macOS 上，同一网卡的多个 IP 只有优先级最高的那条默认路由生效，**仅绑定源 IP 并不会自动改走另一个网关**；确需分流时请配合「路由管理」按目标网段指定网关。
-- 对应接口：`GET /api/interfaces`，返回 `{"interfaces": [{name, ip, cidr, mac, gateway, loopback}], "outbound_ip": "当前生效出口IP"}`。
-- 出口 IP 强制校验：必须是本机网卡上真实存在的 IPv4 地址，否则启动时直接报错退出、`POST /api/status` 返回 `400` 并列出可用的本机 IP；校验失败不会影响正在运行的代理服务。
+**只有出口线路这一个来源**，在实例配置里选一条即可，见[出口线路](#二出口线路按实例选网关)。
+
+代理自己不决定走哪个网关，只负责在拨号时把线路要求的记号施加上去：Linux 是 socket 上的 `SO_MARK`（源地址由内核按线路路由表里的 `src` 挑，代理不绑），macOS 是源地址 + 线路专属端口段里的一个源端口（PF 按它选网关），Windows 是绑网卡。
+
+> **早先版本的「代理出口 IP」已经去掉了。** 那是靠绑定本机源地址来"指定网关"，但绑源地址并不能决定网关 —— 同一块网卡上的多个地址通常仍走同一条默认路由，两个实例去同一个目标也必然走同一个网关（路由查询的输入只有目的地址）。留着两个都像能定出口的地方只会让人困惑。
+>
+> 升级时旧配置里的 `outbound_ip` 会**自动转成一条出口线路**并绑给该实例（按那个地址所在网卡的网关建线路），端口/DNS/开关状态一并保留，出口不会静默改变。转换过程在启动日志里逐条说明；万一转不了（网卡已拔等），会明确告知该实例将走系统默认线路，请去「路由管理 → 出口线路」重新配置。
+>
+> `-outbound-ip` 命令行参数同时移除。
+
+`GET /api/interfaces` 仍然保留（返回 `{"interfaces": [{name, ip, cidr, mac, gateway, loopback}]}`），用于给出口线路和路由管理的网关输入框提供候选。网关按 **IP 逐个解析**而非按网卡：macOS 读 `scutil` 里各网络服务的 `Router`，Linux 用 `ip route get <目标> from <本机IP>`，Windows 从 `route print -4` 的活动路由表里按出口地址挑默认路由（多条时取跃点数最小的）。
 
 ### 代理自己的 DNS
 
-`-dns`，或后台「代理 DNS」：客户端用 `--socks5-hostname` 时域名是交给**代理**解析的，代理默认用系统 DNS。在被污染的网络里系统 DNS 会返回假地址，这时哪怕流量出口在国外也连不上（实测 `www.google.com` 系统 DNS 解析出 `203.0.113.10` → 超时；境外 DNS 解析出 `203.0.113.20` → 0.4 秒 204）。填一个境外 DNS（如 `8.8.8.8`，只填 IP 会自动补 `:53`）即可，**DNS 查询本身也从绑定的出口 IP 发出去**，所以查询不经过被污染的线路。留空则维持系统解析。
+`-dns`，或后台「代理 DNS」：客户端用 `--socks5-hostname` 时域名是交给**代理**解析的，代理默认用系统 DNS。在被污染的网络里系统 DNS 会返回假地址，这时哪怕流量出口在国外也连不上（实测 `www.google.com` 系统 DNS 解析出 `203.0.113.10` → 超时；境外 DNS 解析出 `203.0.113.20` → 0.4 秒 204）。填一个境外 DNS（如 `8.8.8.8`，只填 IP 会自动补 `:53`）即可，**DNS 查询本身也带上实例的出口标记**，跟数据连接走同一条线路出去，所以查询不经过被污染的线路，也不会漏到默认网关。留空则维持系统解析。
 
 ### 实际出口公网 IP 探测
 
-后台点「检测」会真的经由本机 SOCKS5 端口请求一次 `https://myip.ipip.net/`（等价于 `curl --socks5-hostname 127.0.0.1:<port> 'https://myip.ipip.net/'`），用来确认绑定是否真的生效。接口 `GET /api/egress-ip`；代理停止时该接口返回 `409` 并提示先启动代理。
+后台点「检测」会真的经由**该实例**的 SOCKS5 端口请求一次 `https://myip.ipip.net/`（等价于 `curl --socks5-hostname 127.0.0.1:<port> 'https://myip.ipip.net/'`），用来确认绑定是否真的生效。接口 `GET /api/egress-ip?id=pN`；实例停止时该接口返回 `409` 并提示先启动。
+
+⚠️ 这个探测有个盲区：**两个网关同属一个 ISP 时，出口公网 IP 是一样的**，看不出差别。那种情况请用出口线路的「验证」按钮（`ip route get ... mark`），或者直接看下一跳 MAC：
+
+```bash
+ip neigh show dev eth0                       # 确认两个网关的 MAC 不同
+tcpdump -ni eth0 -e 'tcp port 443'           # 逐实例发一次请求，对比目的 MAC
+```
 
 ---
 
-## 二、路由管理（多路由器网关调度）
+## 二、出口线路（按实例选网关）
+
+**这是「让不同端口走不同网关」的正确做法**，位置在「路由管理」页签的最上方。
+
+与下面的[路由管理](#三路由管理多路由器网关调度)的区别：路由管理下发的是 main 表里的**目的地**路由，全机生效——两个实例访问同一个目标时内核只有一条路由，必然走同一个网关。出口线路管的是「哪个**实例**走哪个网关」，两者正交，可以同时用。
+
+### 原理：需要一个「选择器」
+
+路由查询只看**目的地址**。所以光靠加路由，永远分不出"这个包是 8091 实例发的、那个包是 8092 实例发的"——必须给包刻上一个记号，再让内核按记号选路。这个记号就是选择器，各平台不一样：
+
+### 能做到什么，取决于平台
+
+| 平台 | 选择器 | 执行者 | 能力 |
+| --- | --- | --- | --- |
+| **Linux / OpenWrt**（需 root） | socket 上的 `SO_MARK` | `ip rule fwmark` + 独立路由表 | ✅ 完整。**2 张网卡 3 个网关也没问题**，同一块网卡上的两个网关能分开 |
+| **macOS**（需 root） | 每条线路一段**专属源端口** | PF 的 `route-to` | ✅ 完整。同一块网卡上的两个网关也能分开 |
+| **macOS**（非 root） | — | `IP_BOUND_IF` | ⚠️ 降级：只能按**网卡**区分 |
+| **Windows** | — | `IP_UNICAST_IF` | ⚠️ 只能按网卡区分，选的是网卡而非网关 |
+
+界面顶部有一条能力横幅，会把本机此刻**实际**能做到什么如实说出来；接口是 `GET /api/capabilities`，前端只需要看 `per_gateway_same_interface` 这一个字段。做不到的事绝不假装做得到——最糟糕的失败方式是用户以为流量走了指定线路、实际还在默认网关上。
+
+### Linux 上具体做了什么
+
+新建一条线路（网关 `192.168.1.254`、网卡 `eth0`）时下发的是：
+
+```bash
+ip route replace default via 192.168.1.254 dev eth0 src 192.168.1.5 table 7000
+ip rule add priority 300 fwmark 0x40000000/0xff000000 table main suppress_prefixlength 0
+ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000
+```
+
+绑定该线路的实例，其出站 socket（**包括代理自己的 DNS 查询**）会被打上 `0x40000000`，于是落进 7000 表走 `192.168.1.254`。
+
+编号是刻意挑的，且有单元测试锁死（`TestMarkDoesNotCollide`）：
+
+- **路由表 7000–7063**：避开内核保留的 0/253/254/255，以及 mwan3 按接口 id 占用的 1–250。
+- **fwmark 掩码 `0xff000000`，值 `0x40000000`–`0x7f000000`**：既有的 mark 使用者全挤在低三字节（mwan3 `0x3F00`、SQM 低字节、WireGuard `0xCA6C`、Tailscale `0x80000/0xFF0000`），最高字节没人占。
+- **ip rule 优先级 300–427**：排在 `0: local` 之后（否则会抢走本机流量），排在 mwan3(1001+)、Tailscale(5210+)、wg-quick(32764)、`main`(32766) 之前。目标优先级被别人占用时会自动顺延，绝不盲删别人的规则。
+
+那条 `suppress_prefixlength 0` 的规则很关键：我们的规则排在 `main` 前面，打了标的包本来就不会去查 main 表，「路由管理」里下发的目标路由和 LAN 直连路由会统统失效。加上它之后，main 表的查询只忽略默认路由、保留所有更具体的条目，于是**只有「其余一切」才落到线路的表里**。`ip` 命令不支持该参数时会自动降级并在能力横幅、路由页和启动日志三处都说明后果。
+
+### macOS 上具体做了什么
+
+macOS 没有 fwmark，但 PF 能按五元组把包 `route-to` 到指定下一跳。于是选择器落在**源端口**上：每条线路分一段 256 个口的专属源端口（槽位 0..63 → `20000`..`36383`），拨号时从段内选一个绑上，PF 里按"源 IP + 源端口段"匹配的规则把包送到该线路的网关。
+
+```
+pass out quick on en0 route-to (en0 192.168.1.1)   inet proto tcp from 192.168.1.5 port 20000:20255 to any flags S/SA keep state user root label "nettool-u1"
+pass out quick on en0 route-to (en0 192.168.1.1)   inet proto udp from 192.168.1.5 port 20000:20255 to any             keep state user root label "nettool-u1"
+pass out quick on en0 route-to (en0 192.168.1.254) inet proto tcp from 192.168.1.5 port 20256:20511 to any flags S/SA keep state user root label "nettool-u2"
+pass out quick on en0 route-to (en0 192.168.1.254) inet proto udp from 192.168.1.5 port 20256:20511 to any             keep state user root label "nettool-u2"
+```
+
+注意上面两条线路的网卡是**同一块** `en0`，网关不同——这正是绑网卡做不到、绑源 IP 也做不到的那件事（同网卡的两个网关共用一个源 IP）。
+
+几个刻意的选择：
+
+- **anchor 叫 `com.apple/nettool`**。系统自带的 `/etc/pf.conf` 里有一行 `anchor "com.apple/*"`，挂在 `com.apple` 下的子 anchor 会被自动求值，**不用改你的 pf.conf**。启动时会实际读 `/etc/pf.conf` 确认这一行还在——不在的话规则写进去也不会生效，那是必须拦住的静默失效。
+- **端口段 20000–36383**。macOS 的临时端口从 `net.inet.ip.portrange.first`（默认 49152）起，这一段完全在它之外，不会跟内核抢口；也避开了 1024 以下的特权端口。每段 256 个口就是该线路能同时保持的出站连接数，撞上 `EADDRINUSE` 会在段内换口重试。
+- **TCP 和 UDP 各一条规则**。代理自己的 DNS 查询走 UDP:53，只写 TCP 的话查询会从默认网关漏出去，而数据连接走的是指定线路——既泄漏了查询、解析结果也可能对不上。
+- **PF 的启用是引用计数的**（`pfctl -E` 拿令牌、`-X` 归还），不会直接 `pfctl -d` 把别人依赖的 PF 一起关掉。令牌记在 `uplinks.json` 的 `pf_token` 里：进程被 `kill -9` 之后令牌就丢了，那个引用再也还不回去、PF 会一直开着，落盘之后下次启动能把它还回去。
+
+### 验证真的生效了
+
+界面上的「验证」按钮（`GET /api/uplinks/check?id=uN`）问的是内核，**不联网、不发一个字节**，而且是唯一能区分同一网段两个网关的检查（两个网关同属一个 ISP 时，公网 IP 探测是分不出差别的）。
+
+Linux：
+
+```bash
+ip route get 1.1.1.1 mark 0x41000000
+# → 1.1.1.1 via 192.168.1.254 dev eth0 src 192.168.1.5 mark 0x41000000
+```
+
+macOS：把 anchor 里**此刻真正生效**的规则读回来，确认这条线路的规则还在、指向的仍是配置里那个网关、端口段也没变，而且 TCP/UDP 两条都在。
+
+```bash
+pfctl -a com.apple/nettool -s rules
+```
+
+读回来这一步不是多余的：别人一句 `pfctl -F all` 就能把我们的规则冲掉，之后流量会静默回落到默认网关，从外部完全看不出来。发现被冲掉时点「重新下发」即可。
+
+「查看内核规则」按钮（`GET /api/uplinks/kernel`）则原样打印这些命令的输出。
+
+### 台账、崩溃残留与清理
+
+线路记在 `uplinks.json`（与路由台账同目录，可用 `-uplink-file` 指定）。内核里的 `ip rule` 和路由表同样没有「谁加的」这种信息，所以：
+
+- **进程被 `kill -9` 后规则会留在内核里**，这拦不住也清不掉。开机时会拿台账对一遍，把「本程序装的、但台账里已经没有对应线路」的孤儿规则和路由表清扫掉——这是唯一可靠的清理时机，所以退出时不做清理。
+- macOS 上不需要清扫：PF 的 anchor 是**整份规则集**一起加载的，下次启动重新加载时残留会被整份冲掉，天然幂等。要还的只有那个引用令牌，见上面的 `pf_token`。
+- 彻底清干净用 `-uplink-cleanup`（清完即退出，台账保留）。macOS 上它会清空 anchor 并归还 PF 引用。
+- 想先看看会执行什么命令，用 `-uplink-dry-run`，只打印不下发（macOS 上打印将要写入 anchor 的规则文本）。
+- 手工恢复：Linux `ip rule del priority 300`（逐条）、`ip route flush table 7000`；macOS `pfctl -a com.apple/nettool -F rules`。
+
+### OpenWrt / 排查清单
+
+- 精简版的 `ip` 可能不支持 `ip rule`（busybox 未启用 `CONFIG_FEATURE_IP_RULE`）。启动时会探测，不支持时降级为「只能按网卡区分」并提示 `opkg update && opkg install ip-full`。
+- 还会检查 `ip route ... table N` 是否被**静默忽略**——真被忽略的话默认路由会被写进 main 表、直接改掉整机默认网关，这是本功能最危险的失败模式，所以宁可拒绝工作也要先查出来。
+- **rp_filter**：严格模式(1) 的反向路径检查会忽略 fwmark 规则，**跨网卡**场景下回包可能被丢。程序只读 `/proc/sys/net/ipv4/conf/{all,<if>}/rp_filter` 并给出确切命令 `sysctl -w net.ipv4.conf.all.rp_filter=2`，**绝不静默改你的 sysctl**。（同网段双网关一般不受影响；另外 `src_valid_mark=1` 管的是发包方向，对回包没帮助。）
+- **mwan3 共存**：我们的优先级(300+)排在它(1001+)前面，两边互不认领对方的规则。装了 mwan3 的机器上建完线路后可以 `ip rule show` 确认一眼。
+- **防火墙区域**：fw3/fw4 的 zone 与 masquerade 按接口匹配，所以同一接口上的第二个网关会自动继承正确的 zone 和 NAT。但如果网关所在接口没在 `/etc/config/network` 里声明，fw4 会丢掉 output/forward。
+- 没有 root 时线路无法下发，绑了该线路的实例会**拒绝启动**（而不是悄悄从默认网关出去）。
+
+---
+
+## 三、路由管理（多路由器网关调度）
 
 自定义托管路由增删 + 操作系统内核路由实时审计，两张表都在同一页。
 
@@ -98,7 +224,7 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 
 ---
 
-## 三、网卡配置与 Wi-Fi 自动切换
+## 四、网卡配置与 Wi-Fi 自动切换
 
 ### 网卡配置（IP / 掩码 / 网关 / DNS）
 
@@ -124,7 +250,7 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 
 ---
 
-## 四、本地 DNS 服务（多形态上游 + 按域名分流）
+## 五、本地 DNS 服务（多形态上游 + 按域名分流）
 
 - 「DNS 服务」页可随时启停一个本机 DNS 解析器（**UDP + TCP 同时监听**），局域网里的机器把 DNS 指向本机 IP 即可使用。开关状态存在 `dns.json` 里，程序启动时按上次退出前的状态恢复（第一次运行不启动）；加 `-start-dns` 则无条件启动。
 - **四种上游形态**：普通 `udp`（53）、`tcp`（53）、**DoT**（DNS over TLS，853）、**DoH**（DNS over HTTPS，RFC 8484）。地址支持直接粘 `tls://1.1.1.1@one.one.one.one`、`https://dns.google/dns-query`、`udp://223.5.5.5` 等写法，类型自动识别；只填 IP 会按类型补默认端口。
@@ -141,7 +267,7 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 
 ---
 
-## 五、连通性诊断（Ping / 路由追踪）
+## 六、连通性诊断（Ping / 路由追踪）
 
 前面几件事都在决定「流量走哪条线」，这两页用来验证它到底走没走成。
 
@@ -184,10 +310,26 @@ nettool/
 ├── go.mod            # Go 模块配置文件
 ├── main.go           # 入口：解析参数 → 装配各业务 → 起 Web 服务
 ├── internal/
-│   ├── proxy/        # SOCKS5 代理
-│   │   ├── server.go     # 启停、出口 IP 绑定、配置
-│   │   ├── resolver.go   # 代理侧域名解析、目标记录
-│   │   └── stats.go      # 连接与流量统计
+│   ├── proxy/        # SOCKS5 代理（多实例）
+│   │   ├── manager.go    # 实例集合：增删、端口冲突检查、汇总统计
+│   │   ├── server.go     # 单实例的启停、出口绑定、拨号
+│   │   ├── config.go     # 配置持久化与 v1→v2 迁移
+│   │   ├── resolver.go   # 代理侧域名解析（同样带出口标记）、目标记录
+│   │   └── stats.go      # 按实例的连接与流量统计
+│   ├── uplink/       # 出口线路（决定某个实例走哪个网关）
+│   │   ├── model.go      # 线路模型与 mark/表号/优先级/源端口段的编号规则
+│   │   ├── manager.go    # 增删改、开机对账、验证、拨号参数
+│   │   ├── apply.go      # 下发/撤销 ip rule 与路由表、清扫残留
+│   │   ├── oscmd.go      # ip 命令拼装（纯函数）与执行
+│   │   ├── pf.go         # macOS：PF route-to 规则渲染、anchor 加载、引用令牌
+│   │   ├── kernel.go     # ip rule / ip route get 输出解析
+│   │   ├── capability.go # 本机能力探测（ip rule、多路由表、PF、rp_filter、root）
+│   │   └── state.go      # 线路台账持久化
+│   ├── sockopt/      # 出站 socket 的出口约束（全仓库唯一用 build tag 的包）
+│   │   ├── egress.go           # 源地址 + 源端口段的拨号器（段内轮转、占用重试）
+│   │   ├── sockopt_linux.go    # SO_MARK / SO_BINDTODEVICE
+│   │   ├── sockopt_darwin.go   # IP_BOUND_IF
+│   │   └── sockopt_windows.go  # IP_UNICAST_IF（注意网络字节序）
 │   ├── route/        # 路由台账（多路由器网关调度）
 │   │   ├── model.go      # 路由/域名的数据模型
 │   │   ├── manager.go    # 增删改、暂停/恢复
@@ -264,9 +406,18 @@ sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_passw
 
 - `-socks-port`: SOCKS5 代理监听端口（留空沿用配置文件里的值，默认 `8091`）
 - `-start-proxy`: 启动时**无条件**开启 SOCKS5 代理；不加则按上次退出前的开关状态恢复（第一次运行为不启动，在 Web 后台点「启动代理」）
-- `-outbound-ip`: SOCKS5 代理外发流量绑定的本地网卡 IP（留空沿用配置文件里的值）
-- `-dns`: 代理解析域名用的上游 DNS（如 `8.8.8.8`），查询从 `-outbound-ip` 绑定的地址发出；留空沿用配置文件里的值，要改回系统 DNS 在 Web 后台清空即可
+- `-dns`: 代理解析域名用的上游 DNS（如 `8.8.8.8`），查询跟着实例绑定的出口线路走；留空沿用配置文件里的值，要改回系统 DNS 在 Web 后台清空即可
 - `-proxy-config-file`: 代理配置文件路径（留空则与路由台账同目录的 `proxy.json`）
+
+> 以上几个参数**只作用于第一个实例**（它们是单实例时代留下来的）。多实例、以及出口线路的绑定，请走 Web 后台或 `/api/proxy/instances`。
+>
+> `-outbound-ip` 已移除：出口改由出口线路决定，旧配置会自动迁移。
+
+**出口线路**
+
+- `-uplink-file`: 出口线路台账文件路径（留空则与路由台账同目录的 `uplinks.json`）
+- `-uplink-dry-run`: 只打印将要执行的 `ip` 命令而不真的下发，用于确认不会动到别人的规则
+- `-uplink-cleanup`: 清掉本程序装过的全部 `ip rule` 与路由表后退出（卸载时用，台账保留）
 
 **Web 后台**
 
@@ -370,6 +521,55 @@ curl --socks5 127.0.0.1:8091 'https://myip.ipip.net/'
 curl 'https://myip.ipip.net/' -x socks5://127.0.0.1:8091
 ```
 
+### 多实例走不同网关（2 张网卡 3 个网关 · Linux）
+
+拓扑举例：`eth0` = 192.168.1.5/24，网关 `.1` **和** `.254`；`eth1` = 192.168.2.5/24，网关 `.1`。
+建三条出口线路、三个实例各绑一条，然后：
+
+```bash
+# 1) 内核里的规则和表长这样
+ip rule show               # 0: local 在最前；300/301、302/303、304/305 是本程序的；32766: main 还在
+ip route show table 7000   # default via 192.168.1.1   dev eth0 src 192.168.1.5
+ip route show table 7001   # default via 192.168.1.254 dev eth0 src 192.168.1.5
+ip route show table 7002   # default via 192.168.2.1   dev eth1 src 192.168.2.5
+
+# 2) 决定性验证：不联网、不发流量，问内核打了标的包会去哪
+ip route get 1.1.1.1 mark 0x40000000   # → via 192.168.1.1
+ip route get 1.1.1.1 mark 0x41000000   # → via 192.168.1.254  ← 同一块网卡上的第二个网关
+ip route get 1.1.1.1 mark 0x42000000   # → dev eth1
+ip route get 192.168.1.9               # 未打标：仍走 main，证明没伤到别人
+
+# 3) 端到端
+for p in 8091 8092 8093; do curl -s --socks5-hostname 127.0.0.1:$p 'https://myip.ipip.net/'; done
+# 三个不同的公网 IP。若 .1 与 .254 是同一 ISP 下的两台路由器，公网 IP 会一样，
+# 这时改看下一跳 MAC：ip neigh show dev eth0 + tcpdump -ni eth0 -e 'tcp port 443'
+
+# 4) DNS 有没有漏出去：给各实例配不同的代理 DNS，边跑 curl 边抓包，
+#    每条查询都必须从该实例的网关出去
+tcpdump -ni any 'udp port 53'
+```
+
+### 多实例走不同网关（同一块网卡两个网关 · macOS）
+
+需要 `sudo` 运行（`pfctl` 要 root）。拓扑：`en0` = 192.168.1.5/24，同网段上有两台路由器 `.1` 和 `.254`。建两条出口线路、两个实例（8091/8092）各绑一条，然后：
+
+```bash
+# 1) anchor 里真正生效的规则。两条线路网卡相同、网关与端口段不同，这就是关键
+sudo pfctl -a com.apple/nettool -s rules
+
+# 2) 端到端：两个实例应当拿到不同的公网 IP
+for p in 8091 8092; do curl -s --socks5-hostname 127.0.0.1:$p 'https://myip.ipip.net/'; done
+# 同一 ISP 下的两台路由器公网 IP 会一样，这时改看下一跳 MAC：
+#   arp -an | grep -E '192.168.1.(1|254)'
+#   sudo tcpdump -ni en0 -e 'tcp port 443'   逐实例发一次请求，确认目的 MAC 不同
+
+# 3) 源端口是否真的落在该实例的段里（8091→20000-20255，8092→20256-20511）
+sudo lsof -nP -iTCP -sTCP:ESTABLISHED -c nettool
+
+# 4) DNS 有没有漏出去：给两个实例配不同的代理 DNS，边跑 curl 边抓包
+sudo tcpdump -ni en0 'udp port 53'
+```
+
 ### 本地 DNS 服务
 
 ```bash
@@ -400,6 +600,28 @@ curl -s -X POST http://127.0.0.1:8090/api/diag/traceroute \
   -H 'Content-Type: application/json' \
   -d '{"target":"8.8.8.8","max_hops":30,"probes":3,"resolve_names":true}'
 curl -s 'http://127.0.0.1:8090/api/diag/job?kind=traceroute'
+```
+
+### 出口线路
+
+```bash
+# 先看会执行什么命令，确认不会动到 mwan3 等别人的规则
+sudo ./nettool -uplink-dry-run
+
+# 本机到底能做到什么（关键看 per_gateway_same_interface）
+curl -s http://127.0.0.1:8090/api/capabilities
+
+# 内核里的现状
+curl -s http://127.0.0.1:8090/api/uplinks/kernel
+
+# 验证某条线路（等价于 ip route get <目标> mark <该线路的 mark>）
+curl -s 'http://127.0.0.1:8090/api/uplinks/check?id=u1'
+
+# 崩溃残留：kill -9 后重启，规则条数应当不变、不重复
+sudo kill -9 $(pgrep nettool); sudo ./nettool & sleep 2; ip rule show
+
+# 卸载时清干净
+sudo ./nettool -uplink-cleanup
 ```
 
 ### 单元测试

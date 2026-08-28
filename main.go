@@ -5,6 +5,8 @@
 //
 //	internal/proxy      SOCKS5 代理与流量统计
 //	internal/route      路由台账（下发、对账、按域名重新解析）
+//	internal/uplink     出口线路（fwmark 策略路由，让不同代理实例走不同网关）
+//	internal/sockopt    给出站 socket 打平台相关的出口标记
 //	internal/dnsserver  本地 DNS 服务（UDP/TCP/DoT/DoH 上游、分流、缓存）
 //	internal/netconfig  网卡 IP/掩码/网关/DNS 配置与 Wi-Fi 自动切换
 //	internal/netdiag    ping 与 traceroute（可指定源 IP）
@@ -21,6 +23,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"nettool/internal/api"
@@ -28,6 +31,7 @@ import (
 	"nettool/internal/netconfig"
 	"nettool/internal/proxy"
 	"nettool/internal/route"
+	"nettool/internal/uplink"
 )
 
 //go:embed static/*
@@ -35,7 +39,6 @@ var staticFiles embed.FS
 
 type options struct {
 	socksPort       *string
-	outboundIP      *string
 	proxyDNS        *string
 	proxyConfigFile *string
 	apiPort         *string
@@ -45,6 +48,10 @@ type options struct {
 	restoreRoutes   *bool
 	domainRefresh   *time.Duration
 	startProxy      *bool
+
+	uplinkFile    *string
+	uplinkDryRun  *bool
+	uplinkCleanup *bool
 
 	netProfileFile *string
 	wifiWatch      *time.Duration
@@ -59,7 +66,6 @@ type options struct {
 func parseFlags() options {
 	o := options{
 		socksPort:       flag.String("socks-port", "", "SOCKS5 代理端口（留空沿用上次保存的值，默认 8091）"),
-		outboundIP:      flag.String("outbound-ip", "", "SOCKS5 外发流量绑定的本机 IP（留空沿用上次保存的值）"),
 		proxyDNS:        flag.String("dns", "", "代理解析域名用的上游 DNS（如 8.8.8.8 或 8.8.8.8:53），留空沿用上次保存的值"),
 		proxyConfigFile: flag.String("proxy-config-file", "", "SOCKS5 代理配置文件路径（留空则与路由台账同目录）"),
 		apiPort:         flag.String("api-port", "8090", "API management and Web UI port"),
@@ -69,6 +75,10 @@ func parseFlags() options {
 		restoreRoutes:   flag.Bool("restore-routes", false, "启动时自动重新下发台账中已失效的路由"),
 		domainRefresh:   flag.Duration("domain-refresh", 5*time.Minute, "域名路由自动重新解析间隔（0 表示关闭）"),
 		startProxy:      flag.Bool("start-proxy", false, "启动时无条件开启 SOCKS5 代理（不加则按上次退出时的开关状态恢复）"),
+
+		uplinkFile:    flag.String("uplink-file", "", "出口线路台账文件路径（留空则与路由台账同目录）"),
+		uplinkDryRun:  flag.Bool("uplink-dry-run", false, "只打印出口线路将要下发的 ip 命令而不真的执行，用于确认不会动到别人的规则"),
+		uplinkCleanup: flag.Bool("uplink-cleanup", false, "清掉本程序装过的全部 ip rule 与路由表后退出（卸载时用，不删台账）"),
 
 		netProfileFile: flag.String("net-profile-file", "", "Wi-Fi 网卡配置档文件路径（留空则与路由台账同目录）"),
 		wifiWatch:      flag.Duration("wifi-watch", 30*time.Second, "检查当前 Wi-Fi SSID 的间隔，用于自动切换网卡配置（0 表示不自动切换）"),
@@ -87,6 +97,7 @@ func main() {
 	opt := parseFlags()
 
 	statePath := setupRoutes(opt)
+	setupUplinks(opt, statePath) // 必须在 setupProxy 之前：代理实例要绑到出口线路上
 	setupWiFi(opt, statePath)
 	setupDNS(opt, statePath)
 	setupProxy(opt, statePath)
@@ -123,6 +134,61 @@ func setupRoutes(opt options) string {
 
 	route.StartDomainRefresher(*opt.domainRefresh)
 	return statePath
+}
+
+// setupUplinks 载入出口线路台账并与内核对账。
+//
+// 必须在 setupProxy 之前跑：代理实例可能绑定了某条线路，线路没生效时实例会拒绝
+// 启动（而不是悄悄从默认网关出去）。
+//
+// 对账包含清扫残留：内核里的 ip rule 和路由表在进程被 SIGKILL 之后仍然留着，
+// 拦不住也清不掉，开机时对着台账扫一遍是唯一可靠的时机。所以退出时不做清理，
+// 要彻底清掉请用 -uplink-cleanup。
+func setupUplinks(opt options, statePath string) {
+	uplink.DryRun = *opt.uplinkDryRun
+	if uplink.DryRun {
+		log.Printf("[Uplink] dry-run 模式：只打印将要执行的 ip 命令，不会真的下发")
+	}
+
+	path := uplink.ResolveStateFile(*opt.uplinkFile, statePath)
+	if path != "" {
+		log.Printf("[Uplink] 出口线路台账文件: %s", path)
+	}
+	uplink.Default.Load(path)
+
+	if *opt.uplinkCleanup {
+		if err := uplink.Default.Cleanup(); err != nil {
+			log.Fatalf("[Uplink] 清理失败: %v", err)
+		}
+		log.Printf("[Uplink] 已清掉本程序装过的 ip rule 与路由表（台账保留），进程退出")
+		os.Exit(0)
+	}
+
+	c := uplink.Default.Capability()
+	if c.PerGatewaySameInterface {
+		log.Printf("[Uplink] 出口绑定方式: %s，可区分同一块网卡上的多个网关", c.Mode)
+	} else {
+		log.Printf("[Uplink] 出口绑定方式: %s，只能按网卡区分出口，同一块网卡上的两个网关分不开", c.Mode)
+	}
+
+	uplink.Default.Reconcile()
+
+	// 对账之后再报告检查项：suppress_prefixlength 是否可用要等第一次下发才知道，
+	// 而它一旦缺席，"路由管理"里的目标路由对绑了出口的实例就全部失效——
+	// 这种静默失效必须在启动日志里说出来。
+	for _, chk := range uplink.Default.Capability().Checks {
+		if chk.OK {
+			continue
+		}
+		msg := fmt.Sprintf("[Uplink] 注意: %s 不可用", chk.Name)
+		if chk.Detail != "" {
+			msg += " —— " + chk.Detail
+		}
+		if chk.Remedy != "" {
+			msg += "（处理办法: " + chk.Remedy + "）"
+		}
+		log.Print(msg)
+	}
 }
 
 // setupWiFi 载入 Wi-Fi 网卡配置档并开始盯 SSID
@@ -169,33 +235,23 @@ func setupDNS(opt options, statePath string) {
 	}
 }
 
-// setupProxy 载入代理配置与上次的开关状态：上次退出前开着就自动拉起来，
-// 加 -start-proxy 则无条件启动
+// setupProxy 载入代理实例与各自上次的开关状态：上次退出前开着的就自动拉起来，
+// 加 -start-proxy 则无条件启动全部实例。
+//
+// 必须在 setupUplinks 之后：绑定了出口线路的实例要能查到线路是否已经生效，
+// 没生效时它会拒绝启动，而不是悄悄从默认网关出去。
 func setupProxy(opt options, statePath string) {
-	loaded := proxy.Default.Load(proxy.ResolveConfigFile(*opt.proxyConfigFile, statePath))
-	if path := proxy.ConfigPath(); path != "" {
+	proxy.Default.SetUplinks(uplink.Default)
+	proxy.Default.Load(proxy.ResolveConfigFile(*opt.proxyConfigFile, statePath))
+	if path := proxy.Default.ConfigPath(); path != "" {
 		log.Printf("[SOCKS5] 代理配置文件: %s", path)
 	}
-	if err := proxy.ApplyFlags(*opt.socksPort, *opt.outboundIP, *opt.proxyDNS); err != nil {
-		log.Fatalf("Invalid SOCKS5 proxy config: %v", err)
+	// 命令行参数只作用于主实例：它们是单实例时代留下来的，多实例只走 Web 界面
+	if err := proxy.Default.ApplyFlags(*opt.socksPort, *opt.proxyDNS); err != nil {
+		log.Fatalf("[SOCKS5] 命令行代理配置无效: %v", err)
 	}
 
-	port, _, _ := proxy.Default.GetConfig()
-	if !*opt.startProxy && !proxy.Default.WasRunning() {
-		if loaded {
-			log.Printf("[SOCKS5] 上次退出时代理是停止的，本次不自动启动（端口 %s），可在 Web 后台点击「启动代理」", port)
-		} else {
-			log.Printf("[SOCKS5] 代理未启动（端口 %s），可在 Web 后台点击「启动代理」；之后每次启动都按上次的开关状态恢复", port)
-		}
-		return
-	}
-
-	if err := proxy.Default.StartCurrent(); err != nil {
-		if *opt.startProxy {
-			log.Fatalf("Failed to start SOCKS5 proxy: %v", err)
-		}
-		log.Printf("[SOCKS5] 按上次状态自动启动代理失败: %v，代理保持停止", err)
-	}
+	proxy.Default.StartSaved(*opt.startProxy)
 }
 
 // serveWeb 托管内嵌的前端与管理接口，直到进程退出
