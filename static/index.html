@@ -12,7 +12,7 @@
         <header class="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
                 <h1 class="text-3xl font-bold text-indigo-600">网络管理工具</h1>
-                <p class="text-sm text-gray-500 mt-1">SOCKS5 代理 · 多路由器网关调度 · 本地 DNS · 网卡配置 · 连通性诊断</p>
+                <p class="text-sm text-gray-500 mt-1">SOCKS5 代理 · 多路由器网关调度 · 本地 DNS · 网卡配置 · Cloudflare 隧道 · 连通性诊断</p>
             </div>
             <div id="status-badge" class="flex items-center gap-2 bg-green-100 text-green-800 px-4 py-2 rounded-full text-sm font-medium">
                 <span class="w-3 h-3 bg-green-500 rounded-full animate-pulse"></span>
@@ -27,6 +27,7 @@
             <button id="tab-btn-routes" onclick="switchTab('routes')" class="pb-3 -mb-px text-sm font-medium transition">路由管理</button>
             <button id="tab-btn-nic" onclick="switchTab('nic')" class="pb-3 -mb-px text-sm font-medium transition">网卡配置</button>
             <button id="tab-btn-dns" onclick="switchTab('dns')" class="pb-3 -mb-px text-sm font-medium transition">DNS 服务</button>
+            <button id="tab-btn-cf" onclick="switchTab('cf')" class="pb-3 -mb-px text-sm font-medium transition">CF 隧道</button>
             <button id="tab-btn-ping" onclick="switchTab('ping')" class="pb-3 -mb-px text-sm font-medium transition">Ping</button>
             <button id="tab-btn-trace" onclick="switchTab('trace')" class="pb-3 -mb-px text-sm font-medium transition">路由追踪</button>
         </nav>
@@ -780,7 +781,252 @@ ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000</pre>
             </details>
         </section>
 
-        <!-- ============ Tab 5: Ping ============ -->
+        <!-- ============ Tab 5: Cloudflare 隧道 ============ -->
+        <section id="tab-cf" class="hidden">
+            <!-- 概览 -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">已接管隧道</div>
+                    <div id="cf-stat-tunnels" class="text-2xl font-bold text-indigo-600 mt-2">0</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">本地连接器运行中</div>
+                    <div id="cf-stat-running" class="text-2xl font-bold text-emerald-600 mt-2">0</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">云端在线连接</div>
+                    <div id="cf-stat-conns" class="text-2xl font-bold text-amber-600 mt-2">-</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider">cloudflared</div>
+                    <div id="cf-stat-binary" class="text-sm font-bold text-gray-700 mt-3 break-all">检测中…</div>
+                </div>
+            </div>
+
+            <!-- 账号与程序：整行摊开，一眼看完 Token / 账号 / 程序 -->
+            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+                <h2 class="text-lg font-semibold text-gray-700 mb-4">账号与程序</h2>
+                <div class="flex flex-wrap gap-3 items-end">
+                    <div class="flex-1 min-w-[18rem]">
+                        <label class="block text-xs text-gray-500 mb-1">Cloudflare API Token</label>
+                        <div class="relative">
+                            <input type="password" id="cf-token" placeholder="留空表示不改动已保存的"
+                                onfocus="onCFTokenFocus()" oninput="onCFTokenInput()"
+                                class="w-full pl-3 pr-10 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <button type="button" id="cf-token-eye" onclick="toggleCFToken()" title="显示"
+                                class="absolute inset-y-0 right-0 px-2.5 flex items-center text-gray-400 hover:text-gray-600"></button>
+                        </div>
+                    </div>
+                    <button type="button" onclick="verifyCFToken()" class="bg-indigo-600 text-white py-2 px-4 rounded-lg text-sm hover:bg-indigo-700 transition font-medium whitespace-nowrap">验证并读取账号</button>
+                    <button type="button" onclick="clearCFToken()" class="py-2 px-3 rounded-lg text-xs text-red-500 hover:bg-red-50 transition whitespace-nowrap">清除</button>
+                    <div class="flex-1 min-w-[14rem]">
+                        <label class="block text-xs text-gray-500 mb-1">账号</label>
+                        <select id="cf-account" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value="">（尚未读取）</option>
+                        </select>
+                    </div>
+                    <button type="button" id="cf-save-btn" onclick="saveCFSettings()" class="bg-indigo-600 text-white py-2 px-4 rounded-lg text-sm hover:bg-indigo-700 transition font-medium whitespace-nowrap">保存设置</button>
+                </div>
+                <p class="text-xs text-gray-400 mt-2">需要 <span class="font-mono">Account · Cloudflare Tunnel : Edit</span> 与 <span class="font-mono">Zone · DNS : Edit</span> 两项权限。当前：<span id="cf-token-state" class="font-mono">-</span></p>
+                <div id="cf-settings-msg" class="text-xs mt-1"></div>
+
+                <!-- 装好之后基本不用再碰，所以默认收起；没找到 cloudflared 时自己弹开 -->
+                <details id="cf-advanced" class="border-t mt-3 pt-3 group">
+                    <summary class="cursor-pointer select-none text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                        <span class="group-open:rotate-90 transition-transform inline-block">▸</span>
+                        cloudflared 程序
+                        <span id="cf-binary-brief" class="text-gray-400 font-mono ml-1"></span>
+                    </summary>
+                    <div class="flex flex-wrap gap-3 items-end mt-3">
+                        <div class="flex-1 min-w-[18rem]">
+                            <label class="block text-xs text-gray-500 mb-1">cloudflared 路径（留空=自动找）</label>
+                            <input type="text" id="cf-binary" placeholder="自动：托管目录 → PATH" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div class="flex-1 min-w-[16rem]">
+                            <label class="block text-xs text-gray-500 mb-1">下载地址（留空=GitHub 官方）</label>
+                            <input type="text" id="cf-download" placeholder="https://镜像地址/目录/" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <button type="button" id="cf-install-btn" onclick="installCFBinary()" class="bg-emerald-600 text-white py-2 px-4 rounded-lg text-sm hover:bg-emerald-700 transition font-medium whitespace-nowrap">下载安装</button>
+                    </div>
+                    <p id="cf-binary-detail" class="text-xs text-gray-400 mt-2 break-all">检测中…</p>
+                    <p class="text-xs text-gray-400 mt-1">连不上 GitHub 时把下载地址换成镜像；填到目录一级，文件名按本机平台自动拼。</p>
+                </details>
+                <p id="cf-config-file" class="text-xs text-gray-400 font-mono break-all border-t mt-3 pt-3"></p>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                <!-- 隧道列表 -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden lg:col-span-2">
+                    <div class="px-6 py-4 border-b bg-gray-50/50">
+                        <div class="flex justify-between items-center">
+                            <h2 class="text-base font-semibold text-gray-700">隧道</h2>
+                            <div class="flex items-center gap-3">
+                                <span id="cf-synced-at" class="text-xs text-gray-400"></span>
+                                <button onclick="syncCF()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">同步云端</button>
+                            </div>
+                        </div>
+                        <p class="text-xs text-gray-400 mt-1">隧道建在 Cloudflare 那边，本机跑一个 cloudflared 连接器把它接上来。规则改完连接器自己会拉，不用重启。</p>
+                    </div>
+                    <div class="px-6 py-4 border-b">
+                        <form onsubmit="createCFTunnel(event)" class="flex flex-wrap gap-3 items-end">
+                            <div class="flex-1 min-w-[12rem]">
+                                <label class="block text-xs text-gray-500 mb-1">新建隧道名</label>
+                                <input type="text" id="cf-new-name" required placeholder="home-nas" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <button type="submit" class="bg-emerald-600 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-emerald-700 transition">在 Cloudflare 上创建</button>
+                        </form>
+                        <div id="cf-create-msg" class="mt-2 text-xs"></div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+                                    <th class="px-4 py-3 font-medium">名称</th>
+                                    <th class="px-4 py-3 font-medium">云端</th>
+                                    <th class="px-4 py-3 font-medium">本地连接器</th>
+                                    <th class="px-4 py-3 font-medium text-right">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cf-tunnels-body" class="divide-y divide-gray-200 text-sm">
+                                <tr><td colspan="4" class="px-4 py-4 text-center text-gray-400">正在加载...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="cf-orphans" class="hidden px-6 py-4 border-t bg-amber-50/50">
+                        <div class="text-xs font-medium text-amber-800 mb-2">云端还有这些隧道没被本机接管：</div>
+                        <div id="cf-orphans-list" class="flex flex-wrap gap-2"></div>
+                    </div>
+
+                    <!-- 导入本机已有的隧道：给"早就在用 cloudflared"的人，装完就不常用，收起来 -->
+                    <details class="border-t group">
+                        <summary class="cursor-pointer select-none px-6 py-3 text-sm text-gray-600 hover:bg-gray-50 flex items-center gap-1">
+                            <span class="group-open:rotate-90 transition-transform inline-block">▸</span>
+                            导入本机已有的隧道
+                            <span class="text-xs text-gray-400 ml-1">扫 <span class="font-mono">~/.cloudflared</span>，接管以前手写 config 跑的那些</span>
+                        </summary>
+                        <div class="px-6 pb-4">
+                            <p class="text-xs text-gray-400 mb-3">
+                                连接器令牌从凭证文件直接算出来，<b>接管这一步不联网也不要 API Token</b>；config 里的规则会一并迁到云端（<b>迁规则要 Token</b>）。你那个 config 文件本工具不会改动——但迁完之后<b>要把原来那条 <span class="font-mono">cloudflared --config …</span> 停掉</b>，它读的还是文件，不停就是两个连接器规则不一样。
+                            </p>
+                            <div class="flex flex-wrap gap-3 items-end">
+                                <div class="flex-1 min-w-[14rem]">
+                                    <label class="block text-xs text-gray-500 mb-1">额外的目录（可选，逗号分隔）</label>
+                                    <input type="text" id="cf-scan-dirs" placeholder="/opt/cloudflared/tunnel" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                </div>
+                                <button type="button" onclick="discoverCF()" class="bg-indigo-600 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">扫描</button>
+                            </div>
+                            <p class="text-xs text-gray-400 mt-1">默认只看 <span class="font-mono">~/.cloudflared</span>、<span class="font-mono">/etc/cloudflared</span> 这些标准位置；凭证或 config 放在别处就把目录填这里。</p>
+                            <div id="cf-import-msg" class="mt-2 text-xs"></div>
+                            <div id="cf-candidates-body" class="mt-3 space-y-2 text-sm">
+                                <div class="text-xs text-gray-400">点「扫描」看看本机有什么</div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+
+                <!-- 快速隧道 -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden lg:col-span-1">
+                    <div class="px-6 py-4 border-b bg-gray-50/50">
+                        <h2 class="text-base font-semibold text-gray-700">快速隧道（TryCloudflare）</h2>
+                        <p class="text-xs text-gray-400 mt-1">不需要账号、不需要域名：Cloudflare 现分一个临时域名给你，进程一停域名就作废。适合临时把内网服务给别人看一眼。</p>
+                    </div>
+                    <div class="px-6 py-4">
+                        <form onsubmit="startQuickTunnel(event)" class="flex flex-wrap gap-3 items-end">
+                            <div class="flex-1 min-w-[12rem]">
+                                <label class="block text-xs text-gray-500 mb-1">要暴露的本地服务</label>
+                                <input type="text" id="cf-quick-target" required value="http://127.0.0.1:8090" class="w-full px-3 py-2 border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <button type="submit" id="cf-quick-start" class="bg-emerald-600 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-emerald-700 transition">开一条</button>
+                            <button type="button" id="cf-quick-stop" onclick="stopQuickTunnel()" class="hidden bg-red-50 text-red-600 py-2 px-4 rounded-lg text-sm font-medium hover:bg-red-100 transition">停止</button>
+                        </form>
+                        <div class="mt-3 flex flex-wrap items-center gap-3 text-sm">
+                            <span class="text-gray-500 text-xs">临时域名:</span>
+                            <a id="cf-quick-url" href="#" target="_blank" rel="noopener" class="font-mono text-indigo-600 hover:underline break-all">-</a>
+                            <span id="cf-quick-state" class="text-xs text-gray-400"></span>
+                        </div>
+                        <div id="cf-quick-msg" class="mt-2 text-xs"></div>
+                        <pre id="cf-quick-logs" class="mt-3 px-4 py-3 text-xs font-mono text-gray-600 bg-gray-50 rounded-lg h-40 overflow-auto whitespace-pre-wrap">尚无输出</pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 选中隧道的规则与日志 -->
+            <div id="cf-detail" class="hidden mb-6">
+                <div class="rounded-xl border-2 border-indigo-200 bg-indigo-50/30 p-1 mb-0">
+                    <div class="px-5 py-3 flex flex-wrap justify-between items-center gap-3">
+                        <div class="min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-xs text-indigo-500 font-medium">正在查看隧道</span>
+                                <span id="cf-detail-name" class="font-mono text-base font-semibold text-indigo-700"></span>
+                                <span id="cf-detail-badges" class="flex items-center gap-1.5 flex-wrap"></span>
+                            </div>
+                            <div id="cf-detail-cfid" class="text-xs text-gray-400 font-mono break-all mt-0.5"></div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <!-- 规则和日志各占整行看，来回切而不是挤在一起 -->
+                            <div class="flex rounded-lg border border-gray-300 bg-white overflow-hidden text-xs">
+                                <button id="cf-view-ingress" onclick="showCFDetailView('ingress')" class="px-3 py-1.5 font-medium">路由规则</button>
+                                <button id="cf-view-logs" onclick="showCFDetailView('logs')" class="px-3 py-1.5 font-medium border-l border-gray-300">连接器日志</button>
+                            </div>
+                            <button onclick="selectCFTunnel('')" class="text-xs text-gray-500 hover:text-gray-700 whitespace-nowrap border border-gray-300 bg-white rounded-lg px-3 py-1.5">收起</button>
+                        </div>
+                    </div>
+                    <div class="p-2 pt-0">
+                <div id="cf-pane-ingress" class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b bg-gray-50/50 flex justify-between items-center">
+                        <div>
+                            <h2 class="text-base font-semibold text-gray-700">路由规则</h2>
+                            <p class="text-xs text-gray-400 mt-1">从上往下匹配，第一条命中的生效；最后一条兜底规则自动补。</p>
+                        </div>
+                        <button onclick="loadCFIngress()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium whitespace-nowrap">重新拉取</button>
+                    </div>
+                    <div id="cf-detail-source" class="px-6 py-2 text-xs border-b bg-indigo-50/40 text-gray-500 break-all"></div>
+                    <div class="px-6 py-4">
+                        <div id="cf-ingress-rows" class="space-y-3"></div>
+                        <div class="flex gap-2 mt-3">
+                            <button type="button" onclick="addIngressRow()" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">+ 加一条</button>
+                        </div>
+                        <button type="button" id="cf-ingress-save" onclick="saveCFIngress()" class="w-full mt-4 bg-indigo-600 text-white py-2 rounded-lg text-sm hover:bg-indigo-700 transition font-medium">保存到 Cloudflare</button>
+                        <div id="cf-ingress-msg" class="mt-2 text-xs"></div>
+                        <p class="text-xs text-gray-400 mt-3 border-t pt-3">
+                            填好域名后点那一行的「下 DNS」，会在对应的 Cloudflare 域名下建一条指向本隧道的 CNAME（橙云）——这一步要 API Token。
+                            service 形如 <span class="font-mono">http://127.0.0.1:8090</span>、<span class="font-mono">ssh://127.0.0.1:22</span>、<span class="font-mono">http_status:404</span>；
+                            「高级」里是 <span class="font-mono">originRequest</span>（回源到本机服务时的参数，如自签证书要开 noTLSVerify）。
+                        </p>
+                    </div>
+                </div>
+
+                <div id="cf-pane-logs" class="hidden bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b bg-gray-50/50 flex justify-between items-center">
+                        <h2 class="text-base font-semibold text-gray-700">连接器日志</h2>
+                        <span class="text-xs text-gray-400">停在本页时每 3 秒续读</span>
+                    </div>
+                    <pre id="cf-logs" class="px-4 py-3 text-xs font-mono text-gray-600 bg-gray-50 h-[28rem] overflow-auto whitespace-pre-wrap">尚无输出</pre>
+                </div>
+                    </div>
+                </div>
+            </div>
+
+            <details class="mt-6 rounded-xl border border-gray-100 bg-white shadow-sm">
+                <summary class="cursor-pointer select-none px-6 py-4 text-sm font-medium text-gray-600 hover:text-gray-800">技术原理</summary>
+                <div class="px-6 pb-5 pt-1 text-xs leading-relaxed text-gray-500 space-y-3">
+                    <p><b class="text-gray-600">隧道是「从里往外拨」的。</b>cloudflared 主动连到 Cloudflare 边缘并保持住几条长连接，外面的请求先到 Cloudflare，再顺着这几条连接送进来。所以本机不需要公网 IP、不需要在路由器上开端口映射，运营商封不封入站都无所谓——防火墙只看到几条普通的出站 HTTPS。</p>
+                    <p><b class="text-gray-600">规则的真源在云端。</b>本工具只用云端托管这一种（cloudflared 那边叫 <span class="font-mono">config_src=cloudflare</span>）：ingress 规则由 Cloudflare 保管，连接器连上之后配置顺着隧道自己下发，改完几秒生效、不用重启。本机因此不需要 <span class="font-mono">config.yml</span>，也不需要凭证文件，启动命令干净得只剩一个令牌，换台机器把令牌填进去就能接着跑。代价是断网时看不了规则（要调 API 才读得到），也没法把规则丢进 git 里做版本管理。</p>
+                    <p><b class="text-gray-600">另一种托管方式是什么。</b><span class="font-mono">config_src=local</span> 时规则在本机的 <span class="font-mono">config.yml</span> 里，用 <span class="font-mono">credentials-file</span> 跑——就是 <span class="font-mono">cloudflared tunnel create</span> + 手写配置那一套。本工具不管这种，但认得它：导入时会把 config 里的规则读出来推到云端，隧道也就跟着转成云端托管了。<b>但 <span class="font-mono">config_src</span> 不覆盖本地文件</b>——它决定的只是"云端存的那份算不算数"。带 <span class="font-mono">--config</span> 启动的 cloudflared 用的仍然是文件里的规则，云端那份对它无效。所以转过去之后<b>必须把启动方式一起改掉</b>（去掉 <span class="font-mono">--config</span>，改成令牌走 <span class="font-mono">TUNNEL_TOKEN</span>），否则这里改的规则一条都不生效，而界面和云端看起来全是对的。</p>
+                    <p><b class="text-gray-600">导入不需要 API Token。</b>凭证文件 <span class="font-mono">~/.cloudflared/&lt;UUID&gt;.json</span> 里的 <span class="font-mono">{AccountTag, TunnelID, TunnelSecret}</span> 和连接器令牌装的是同一份秘密——令牌就是这三样拼成 <span class="font-mono">{"a","t","s"}</span> 再 base64。所以扫到凭证就能算出令牌，接管隧道这一步完全不联网。（把规则迁到云端、建隧道、下 DNS 这三件事仍然要 Token。）</p>
+                    <p><b class="text-gray-600">连接器令牌等于这条隧道的密码。</b>拿到它的人就能把隧道接到自己机器上。所以它只存在权限 0600 的配置文件里，接口一律不返回，启动 cloudflared 时也走环境变量 <span class="font-mono">TUNNEL_TOKEN</span> 而不是命令行参数——命令行在同一台机器上是人人可见的（<span class="font-mono">ps</span>、<span class="font-mono">/proc/*/cmdline</span>）。<b>API Token 例外</b>：它默认同样只显示脱敏值，但输入框右边的小眼睛能把明文调回来（换机器时总得能抄走），每读一次都会在日志里记一行。这个接口没有额外的门——没配 <span class="font-mono">-user</span>/<span class="font-mono">-pass</span> 时，能打开这个页面的人本来就能改隧道、下 DNS，放在不可信网络上请开认证。</p>
+                    <p><b class="text-gray-600">你的 config 文件本工具从不写。</b>导入时只读一遍把规则拿出来。那种文件通常有注释、有注释掉的备用规则，还被开机脚本引用着，重写它去换一个不再生效的东西不划算。</p>
+                    <p><b class="text-gray-600">同一条隧道别跑两个连接器。</b>如果你的 systemd/procd 脚本还在跑着同一条隧道，本工具再起一个就是两个连接器。Cloudflare 允许这么做（当成高可用副本），请求走哪个是边缘定的。<b>两个连接器的规则来源不一样时这会很难查</b>：旧的读文件、新的读云端，同一个域名可能通也可能 404，取决于请求落在谁身上，而云端和这个界面看起来完全正常。导入之后一定要把旧的那条命令（连同拉起它的 systemd/procd 脚本）停掉。</p>
+                    <p><b class="text-gray-600">域名要走橙云。</b>「下 DNS」建的是一条指向 <span class="font-mono">&lt;隧道ID&gt;.cfargotunnel.com</span> 的 CNAME，并且必须开代理（橙云）——这个地址只有经过 Cloudflare 边缘才解析得到，灰云的话外面查到的是 NXDOMAIN。同名已有 CNAME 时是改而不是加，因为同名多条 CNAME 会被 Cloudflare 直接拒收。</p>
+                    <p><b class="text-gray-600">规则和解析是两回事，删规则不会动 DNS。</b>ingress 规则存在隧道的配置里，CNAME 存在域名的 zone 里，两边互不知情。删掉规则而 CNAME 还在，请求照样进隧道，只是匹配不到规则，落到兜底那条上回 404；把整条隧道删了，那条 CNAME 就成了悬空记录，访问会得到 Cloudflare 的 <span class="font-mono">Error 1016</span>。所以删规则时会问一句要不要顺带收掉解析，也可以单独点「删 DNS」。删之前会先比对记录内容，只删确认指向本隧道的那条——指向别处、或是 A 记录的一律不碰，报错让你自己去后台确认，因为 DNS 记录删了没有回收站。</p>
+                    <p><b class="text-gray-600">自动重启只对「活过一分钟的」生效。</b>cloudflared 自己扛住网络抖动（断线重连都在它内部，进程不退），所以进程真的退出基本只有两种：令牌或参数不对（起来几秒就死，重试多少次都一样），或者被外力杀掉。于是规则定成只有活过 60 秒的意外退出才自动拉起来，短命的直接停下、把最后几行日志留在上面，让你看见真正的原因。</p>
+                    <p><b class="text-gray-600">快速隧道是另一套。</b>它不用账号也不用令牌，Cloudflare 现场分一个 <span class="font-mono">*.trycloudflare.com</span> 给你，域名只在这个进程活着的时候有效，也没有任何访问控制——别拿它挂长期服务。那个域名只出现在启动横幅里，所以是从进程输出里抓出来的。</p>
+                    <p><b class="text-gray-600">为什么要装 cloudflared。</b>本工具是单二进制、无外部依赖的，但连接器用的是 Cloudflare 未公开的私有协议，没有第三方实现，只能调官方程序。一键安装从 GitHub Releases 拉对应平台的包（macOS 是 .tgz，要解出里面的可执行文件），下完先跑一次 <span class="font-mono">--version</span> 确认能用，再原子替换到托管目录——拉到半个文件或一个 HTML 错误页时会在这一步被拦住。</p>
+                </div>
+            </details>
+        </section>
+
+        <!-- ============ Tab 6: Ping ============ -->
         <section id="tab-ping" class="hidden">
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
@@ -883,7 +1129,7 @@ ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000</pre>
             </details>
         </section>
 
-        <!-- ============ Tab 6: 路由追踪 ============ -->
+        <!-- ============ Tab 7: 路由追踪 ============ -->
         <section id="tab-trace" class="hidden">
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <!-- Traceroute 参数 -->
@@ -969,13 +1215,14 @@ ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000</pre>
     </div>
 
     <script>
-        const TABS = ['proxy', 'routes', 'nic', 'dns', 'ping', 'trace'];
+        const TABS = ['proxy', 'routes', 'nic', 'dns', 'cf', 'ping', 'trace'];
         const ACTIVE_TAB_CLASSES = ['border-b-2', 'border-indigo-600', 'text-indigo-600'];
         const INACTIVE_TAB_CLASSES = ['text-gray-500', 'hover:text-gray-700'];
         let activeTab = 'proxy';
         let routesTabLoaded = false;
         let nicTabLoaded = false;
         let dnsTabLoaded = false;
+        let cfTabLoaded = false;
         let diagTabLoaded = {ping: false, trace: false};
 
         function switchTab(name) {
@@ -1007,6 +1254,11 @@ ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000</pre>
             if (name === 'dns' && !dnsTabLoaded) {
                 dnsTabLoaded = true;
                 loadDNS();
+            }
+            // 上次看的是哪条隧道，回来还接着看那条
+            if (name === 'cf' && !cfTabLoaded) {
+                cfTabLoaded = true;
+                if (cfSelected) selectCFTunnel(cfSelected); else loadCF();
             }
             // 诊断页首次进入时把网卡列表填上，并接回上一次的诊断（页面刷新过也能续上）
             if ((name === 'ping' || name === 'trace') && !diagTabLoaded[name]) {
@@ -2990,6 +3242,883 @@ ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000</pre>
             }
         }
 
+        // ============ CF 隧道 ============
+        //
+        // 这一页有两类数据：本地的（隧道台账、连接器状态、cloudflared）走 /api/cftunnel，
+        // 不联网、可以随便刷；云端的（隧道列表、ingress 规则、DNS、域名列表）每次都要
+        // 打一趟 Cloudflare，所以只在用户点按钮时才拉。
+
+        let cfSelected = '';
+        let cfDetailView = 'ingress';  // 详情区看的是规则还是日志
+        try {
+            cfSelected = localStorage.getItem('nettool-cf-tunnel') || '';
+            cfDetailView = localStorage.getItem('nettool-cf-view') === 'logs' ? 'logs' : 'ingress';
+        } catch (err) { /* 隐私模式下忽略 */ }
+        let cfAccounts = [];       // 验证 Token 后拿到的账号列表
+        let cfTunnels = [];        // 最近一次渲染用的隧道列表
+        let cfRemoteList = null;   // 最近一次同步拿到的云端隧道，用来找出还没接管的
+        let cfLogSeq = 0, cfQuickLogSeq = 0;
+        // 输入框的"服务端版本"。用户改过还没保存的内容不能被定时刷新冲掉。
+        let cfInputBaseline = {};
+
+        function syncCFInput(id, value) {
+            let el = document.getElementById(id);
+            if (!el || document.activeElement === el) return;
+            if (cfInputBaseline[id] !== undefined && el.value !== cfInputBaseline[id]) return;
+            el.value = value || '';
+            cfInputBaseline[id] = el.value;
+        }
+
+        async function loadCF() {
+            try {
+                let d = await (await fetch('/api/cftunnel')).json();
+                renderCF(d);
+            } catch (err) {
+                showMsg('cf-settings-msg', '读取失败: ' + err, false);
+            }
+        }
+
+        function renderCF(d) {
+            let tunnels = d.tunnels || [];
+            cfTunnels = tunnels; // cfCurrent() 要用，切换按钮/保存文案都看它
+            let running = tunnels.filter(t => t.status && t.status.running).length;
+            let conns = tunnels.reduce((n, t) => n + (t.remote ? cfActiveConns(t.remote) : 0), 0);
+
+            document.getElementById('cf-stat-tunnels').textContent = tunnels.length;
+            document.getElementById('cf-stat-running').textContent = running + ' / ' + tunnels.length;
+            document.getElementById('cf-stat-conns').textContent = d.synced_at ? conns : '-';
+
+            renderCFSettings(d.settings || {});
+            renderCFBinary(d.binary || {}, d.install || {});
+            // 找不到 cloudflared 时把收起来的那块自己弹开——那正是要去改的地方
+            if (d.binary && !d.binary.found) document.getElementById('cf-advanced').open = true;
+            renderCFTunnels(tunnels);
+            renderCFQuick(d.quick || {});
+
+            document.getElementById('cf-config-file').textContent =
+                d.config_file ? '配置文件: ' + d.config_file : '未启用持久化，隧道只存在于内存中';
+            document.getElementById('cf-synced-at').textContent =
+                d.synced_at ? '同步于 ' + formatTime(d.synced_at) : '尚未同步';
+        }
+
+        function cfActiveConns(remote) {
+            return (remote.connections || []).filter(c => !c.is_pending_reconnect).length;
+        }
+
+        // ---- Token 框 ----
+        // 框里可能是三种东西，保存/验证时的含义不一样：
+        //   stored='dots'  已经存着一份，摆一串圆点占位  → 提交时当留空，不改动
+        //   stored='plain' 点了小眼睛，现从后端拉回来的明文 → 同上，用户没改就别重存
+        //   stored=''      用户自己敲/粘的                → 提交这个值
+        const CF_TOKEN_DOTS = '••••••••••••••••••••';
+        const EYE_SHOW = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="w-4 h-4"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>`;
+        const EYE_HIDE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="w-4 h-4"><path d="M2 12s3.6-6.5 10-6.5c2 0 3.7.6 5.1 1.5M22 12s-3.6 6.5-10 6.5c-2 0-3.7-.6-5.1-1.5"/><path d="M3 3l18 18"/></svg>`;
+
+        function cfTokenBox() { return document.getElementById('cf-token'); }
+
+        // 框里放的是不是"已存的那份"（占位或现拉的明文），而不是用户的输入
+        function cfTokenIsStored() { return cfTokenBox().dataset.stored === 'dots' || cfTokenBox().dataset.stored === 'plain'; }
+
+        // 提交给后端的值：用户没动过就给空串，后端把空串理解成「不改动已存的」
+        function cfTokenValue() { return cfTokenIsStored() ? '' : cfTokenBox().value.trim(); }
+
+        function updateCFEye() {
+            let shown = cfTokenBox().type === 'text';
+            let btn = document.getElementById('cf-token-eye');
+            btn.innerHTML = shown ? EYE_HIDE : EYE_SHOW;
+            btn.title = shown ? '隐藏' : '显示';
+        }
+
+        // 摆回歇着的样子：存过就是一串圆点，没存过就是空框
+        function showCFTokenDots(tokenSet) {
+            let box = cfTokenBox();
+            box.type = 'password';
+            box.dataset.stored = tokenSet ? 'dots' : '';
+            box.value = tokenSet ? CF_TOKEN_DOTS : '';
+            box.placeholder = tokenSet ? '留空表示不改动已保存的' : '粘贴 Cloudflare API Token';
+            updateCFEye();
+        }
+
+        // 设置每 3 秒刷一次，这里得让开三种情况，别把人家正在看/正在打的东西冲掉：
+        // 光标在框里、正显示着明文、已经输入了一半
+        function syncCFTokenBox(tokenSet) {
+            let box = cfTokenBox();
+            if (document.activeElement === box || box.dataset.stored === 'plain') return;
+            if (!cfTokenIsStored() && box.value !== '') return;
+            showCFTokenDots(tokenSet);
+        }
+
+        // 点进框里就把圆点占位让开，免得用户在占位后面接着打
+        function onCFTokenFocus() {
+            let box = cfTokenBox();
+            if (box.dataset.stored !== 'dots') return;
+            box.dataset.stored = '';
+            box.value = '';
+        }
+
+        function onCFTokenInput() { cfTokenBox().dataset.stored = ''; }
+
+        // 小眼睛：框里是用户自己输的就地切明文/密文；是已存的那份就得跟后端要一次
+        async function toggleCFToken() {
+            let box = cfTokenBox();
+            if (!cfTokenIsStored()) {
+                box.type = box.type === 'password' ? 'text' : 'password';
+                updateCFEye();
+                return;
+            }
+            if (box.dataset.stored === 'plain') { // 收起来，换回圆点
+                showCFTokenDots(true);
+                return;
+            }
+
+            showMsg('cf-settings-msg', '正在读取已保存的 Token…', true);
+            try {
+                let res = await fetch('/api/cftunnel/token');
+                let text = await res.text();
+                if (!res.ok) { showMsg('cf-settings-msg', '读取失败: ' + text, false); return; }
+                box.value = JSON.parse(text).api_token || '';
+                box.dataset.stored = 'plain';
+                box.type = 'text';
+                updateCFEye();
+                showMsg('cf-settings-msg', '', true);
+            } catch (err) {
+                showMsg('cf-settings-msg', '读取失败: ' + err, false);
+            }
+        }
+
+        // 存下 / 清掉之后把框复位，下一次刷新会重新摆好占位
+        function resetCFTokenBox() {
+            let box = cfTokenBox();
+            box.dataset.stored = '';
+            box.value = '';
+            box.type = 'password';
+            updateCFEye();
+        }
+
+        function renderCFSettings(s) {
+            document.getElementById('cf-token-state').textContent =
+                s.token_set ? (s.token_masked || '已保存') : '未设置';
+            syncCFTokenBox(!!s.token_set);
+            syncCFInput('cf-binary', s.binary_path);
+            syncCFInput('cf-download', s.download_url);
+
+            // 还没验证过 Token 时账号列表是空的，但存着的账号仍要显示出来
+            let sel = document.getElementById('cf-account');
+            let list = cfAccounts.length ? cfAccounts
+                : (s.account_id ? [{id: s.account_id, name: s.account_name || s.account_id}] : []);
+            let want = sel.value || s.account_id || '';
+            let html = list.length ? '' : '<option value="">（尚未读取）</option>';
+            list.forEach(a => {
+                html += `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name || a.id)}</option>`;
+            });
+            if (sel.innerHTML !== html) sel.innerHTML = html;
+            if (want) sel.value = want;
+        }
+
+        function renderCFBinary(b, install) {
+            document.getElementById('cf-stat-binary').textContent =
+                b.found ? (b.version || '已安装') : '未安装';
+            // 收起状态下也要看得出程序在不在，不然得展开才知道
+            document.getElementById('cf-binary-brief').textContent =
+                install.running ? '（正在下载…）' : (b.found ? '（已就绪）' : '（未安装）');
+
+            let detail = document.getElementById('cf-binary-detail');
+            let btn = document.getElementById('cf-install-btn');
+
+            if (install.running) {
+                let pct = install.total > 0 ? Math.round(install.downloaded * 100 / install.total) + '%'
+                                            : formatBytes(install.downloaded);
+                detail.textContent = '正在下载 ' + pct + ' … ' + (install.url || '');
+                detail.className = 'text-xs text-indigo-600 mt-1 break-all';
+                btn.disabled = true;
+                btn.textContent = '下载中…';
+                return;
+            }
+            btn.disabled = false;
+            btn.textContent = '下载安装';
+
+            if (b.found) {
+                const SOURCE = {configured: '手动指定', managed: '本程序安装', path: 'PATH'};
+                detail.textContent = `${b.path}（${SOURCE[b.source] || b.source}）`;
+                detail.className = 'text-xs text-gray-400 mt-1 break-all';
+                // 程序已经在了的时候也要说安装的结果，否则「重装/升级」失败或者
+                // 装完要重启连接器这两件事在界面上完全看不见
+                if (install.error) {
+                    detail.textContent += '。上次下载失败: ' + install.error;
+                    detail.className = 'text-xs text-red-600 mt-1 break-all';
+                } else if (install.note) {
+                    detail.textContent += '。' + install.note;
+                    detail.className = 'text-xs text-amber-600 mt-1 break-all';
+                }
+            } else {
+                let extra = install.error ? '；上次下载失败: ' + install.error : '';
+                detail.textContent = (b.error || '没找到 cloudflared') + extra +
+                    (b.managed_path ? '。点「下载安装」会装到 ' + b.managed_path : '');
+                detail.className = 'text-xs text-red-600 mt-1 break-all';
+            }
+        }
+
+        const CF_REMOTE_STATE = {
+            healthy: ['健康', 'text-emerald-600'],
+            degraded: ['部分连接异常', 'text-amber-600'],
+            down: ['已断开', 'text-red-500'],
+            inactive: ['从未连接', 'text-gray-400'],
+        };
+
+        function cfRemoteCell(v) {
+            if (v.remote_missing) return '<span class="text-xs text-red-500">云端已删除</span>';
+            if (!v.remote) return '<span class="text-xs text-gray-400">未同步</span>';
+            let [text, cls] = CF_REMOTE_STATE[v.remote.status] || [v.remote.status || '未知', 'text-gray-500'];
+            return `<span class="text-xs font-medium ${cls}">${escapeHtml(text)}</span>` +
+                `<div class="text-xs text-gray-400">${cfActiveConns(v.remote)} 条连接</div>`;
+        }
+
+        function cfLocalCell(v) {
+            let st = v.status || {};
+            if (st.running) {
+                let restarts = st.restarts ? ` · 已自动重启 ${st.restarts} 次` : '';
+                // 连上了却没有规则：云端看着 healthy，实际每个请求都 503
+                let noIngress = st.no_ingress
+                    ? '<div class="text-xs text-red-500">手里没有规则，所有请求都 503 —— 点「启动」重启一次让它重新拉配置</div>'
+                    : '';
+                return `<span class="text-xs font-medium text-emerald-600">运行中</span>` +
+                    `<div class="text-xs text-gray-400">${escapeHtml(formatInterval(st.uptime_seconds || 0))}${restarts}</div>` + noIngress;
+            }
+            let why = st.last_exit ? `<div class="text-xs text-gray-400 break-all">${escapeHtml(st.last_exit)}</div>` : '';
+            if (!v.has_token) why = '<div class="text-xs text-red-500">没有连接器令牌</div>';
+            return '<span class="text-xs font-medium text-gray-500">已停止</span>' + why;
+        }
+
+        function renderCFTunnels(tunnels) {
+            let tbody = document.getElementById('cf-tunnels-body');
+            if (!tunnels.length) {
+                tbody.innerHTML = '<tr><td colspan="4" class="px-4 py-4 text-center text-gray-400">还没有隧道：上面建一条、点「同步云端」接管已有的，或在下面导入本机已经在跑的</td></tr>';
+            } else {
+                tbody.innerHTML = tunnels.map(v => {
+                    // 选中的那行要一眼看得出来：左边一道竖杠 + 底色，名字加粗变蓝
+                    let on = v.id === cfSelected;
+                    let sel = on ? ' bg-indigo-50 border-l-4 border-indigo-500' : ' border-l-4 border-transparent';
+                    let nameCls = on ? 'text-indigo-700 font-semibold' : 'text-gray-800 hover:text-indigo-600';
+                    let power = (v.status && v.status.running)
+                        ? `<button onclick="cfPower('${v.id}','stop')" class="text-red-500 hover:text-red-700">停止</button>`
+                        : `<button onclick="cfPower('${v.id}','start')" class="text-emerald-600 hover:text-emerald-800">启动</button>`;
+                    let refresh = `<button onclick="cfPower('${v.id}','refresh-token')" class="text-gray-500 hover:text-gray-700">重拉令牌</button>`;
+                    return `<tr class="hover:bg-gray-50${sel}">
+                        <td class="px-4 py-3">
+                            <button onclick="selectCFTunnel('${v.id}')" class="font-medium ${nameCls}">${escapeHtml(v.name)}</button>
+                            ${on ? '<div class="text-xs text-indigo-500">▾ 下方查看中</div>' : ''}
+                            <div class="text-xs text-gray-400 font-mono break-all">${escapeHtml(v.cf_id)}</div>
+                        </td>
+                        <td class="px-4 py-3">${cfRemoteCell(v)}</td>
+                        <td class="px-4 py-3">${cfLocalCell(v)}</td>
+                        <td class="px-4 py-3 text-right text-xs space-x-3 whitespace-nowrap">
+                            ${power}
+                            <button onclick="selectCFTunnel('${v.id}','ingress')" class="text-indigo-600 hover:text-indigo-800 font-medium">规则</button>
+                            <button onclick="selectCFTunnel('${v.id}','logs')" class="text-indigo-600 hover:text-indigo-800 font-medium">日志</button>
+                            ${refresh}
+                            <button onclick="deleteCFTunnel('${v.id}', '${escapeHtml(v.name)}')" class="text-red-500 hover:text-red-700">删除</button>
+                        </td>
+                    </tr>`;
+                }).join('');
+                // 一条都没选时给个去处，不然下面那块空着没人知道点哪儿
+                if (!cfSelected) {
+                    tbody.innerHTML += `<tr><td colspan="4" class="px-4 py-2 text-center text-xs text-gray-400">点隧道名看它的路由规则与连接器日志</td></tr>`;
+                }
+            }
+
+            // 选中的隧道被删掉之后详情区要收起来
+            if (cfSelected && !tunnels.some(v => v.id === cfSelected)) selectCFTunnel('');
+            let current = tunnels.find(v => v.id === cfSelected);
+            if (current) renderCFDetailHeader(current);
+
+            renderCFOrphans(tunnels);
+        }
+
+        // 详情区顶部那条：在看哪条隧道、它现在什么状态
+        function renderCFDetailHeader(v) {
+            document.getElementById('cf-detail-name').textContent = v.name;
+            document.getElementById('cf-detail-cfid').textContent = v.cf_id;
+
+            let st = v.status || {};
+            let badges = [];
+            if (st.running) {
+                badges.push(['bg-emerald-100 text-emerald-700', '连接器运行中 · ' + formatInterval(st.uptime_seconds || 0)]);
+            } else {
+                badges.push(['bg-gray-200 text-gray-600', '连接器已停止']);
+            }
+            if (st.no_ingress) badges.push(['bg-red-100 text-red-700', '手里没有规则，全部 503']);
+            if (v.remote) {
+                let n = cfActiveConns(v.remote);
+                badges.push([n ? 'bg-amber-100 text-amber-700' : 'bg-gray-200 text-gray-600', '云端 ' + n + ' 条连接']);
+            }
+            if (v.remote_missing) badges.push(['bg-red-100 text-red-700', '云端已删除']);
+            if (!v.has_token) badges.push(['bg-red-100 text-red-700', '没有连接器令牌']);
+
+            document.getElementById('cf-detail-badges').innerHTML = badges.map(
+                ([cls, text]) => `<span class="px-2 py-0.5 rounded text-xs font-medium ${cls}">${escapeHtml(text)}</span>`).join('');
+            document.getElementById('cf-detail-source').innerHTML =
+                '规则真源：Cloudflare 云端。保存后连接器几秒内自己拉到，不用重启。';
+        }
+
+        function cfCurrent() {
+            return (cfTunnels || []).find(v => v.id === cfSelected) || {};
+        }
+
+        // ---- 导入本机已有的隧道 ----
+
+        async function discoverCF() {
+            let dirs = document.getElementById('cf-scan-dirs').value.split(',')
+                .map(s => s.trim()).filter(Boolean);
+            let query = dirs.map(d => 'dir=' + encodeURIComponent(d)).join('&');
+            showMsg('cf-import-msg', '正在扫描…', true);
+            try {
+                let res = await fetch('/api/cftunnel/discover' + (query ? '?' + query : ''));
+                if (!res.ok) { showMsg('cf-import-msg', '扫描失败: ' + await res.text(), false); return; }
+                let list = (await res.json()).candidates || [];
+                renderCFCandidates(list);
+                showMsg('cf-import-msg', list.length ? `扫到 ${list.length} 条` : '本机没找到 cloudflared 凭证文件', true);
+            } catch (err) {
+                showMsg('cf-import-msg', '扫描失败: ' + err, false);
+            }
+        }
+
+        function renderCFCandidates(list) {
+            let box = document.getElementById('cf-candidates-body');
+            if (!list.length) {
+                box.innerHTML = '<div class="text-xs text-gray-400">没扫到。凭证或 config 放在非标准位置的话，把目录填在上面再扫一次</div>';
+                return;
+            }
+            box.innerHTML = list.map(c => {
+                let action;
+                // 只接管：不读 config、不碰云端，没有 API Token 也能点
+                let adopt = `<button onclick="importCF('${escapeHtml(c.credentials_path)}', '', '${escapeHtml(c.name)}')" class="text-xs text-gray-500 hover:text-gray-700">只接管</button>`;
+                if (c.problem) {
+                    action = `<span class="text-xs text-red-500">${escapeHtml(c.problem)}</span>`;
+                } else if (c.adopted) {
+                    action = '<span class="text-xs text-gray-400">已接管</span>';
+                } else if (!c.config_path) {
+                    // 凭证找到了但配不上 config，让用户把路径填进来
+                    action = `${adopt}<div class="mt-1"><button onclick="importCFPrompt('${escapeHtml(c.credentials_path)}')" class="text-xs text-indigo-600 hover:text-indigo-800">填 config 路径…</button></div>`;
+                } else {
+                    action = `<button onclick="importCF('${escapeHtml(c.credentials_path)}', '${escapeHtml(c.config_path)}', '${escapeHtml(c.name)}')" class="text-xs text-emerald-600 hover:text-emerald-800 font-medium">导入并迁规则</button><div class="mt-1">${adopt}</div>`;
+                }
+                let hosts = c.hostnames
+                    ? `<div class="text-xs text-gray-400">${escapeHtml(c.hostnames)}</div>`
+                    : (c.config_path ? '' : '<div class="text-xs text-amber-600">没找到配套的 config</div>');
+                // 窄栏里放不下四列表格，改成一条一块，路径单独一行折行显示
+                return `<div class="border rounded-lg px-3 py-2 ${c.adopted ? 'bg-gray-50' : 'bg-white'}">
+                    <div class="flex justify-between items-start gap-3">
+                        <div class="min-w-0">
+                            <div class="font-medium text-gray-800">${escapeHtml(c.name)}</div>
+                            <div class="text-xs text-gray-400 font-mono break-all">${escapeHtml(c.tunnel_id)}</div>
+                        </div>
+                        <div class="text-right whitespace-nowrap">${action}</div>
+                    </div>
+                    <div class="text-xs text-gray-500 font-mono break-all mt-1.5">
+                        <div>凭证 ${escapeHtml(c.credentials_path)}</div>
+                        <div>config ${escapeHtml(c.config_path || '—— 没找到配套的')}</div>
+                    </div>
+                    ${c.config_path ? `<div class="text-xs text-gray-400 mt-0.5">${c.ingress_count} 条规则</div>` : ''}
+                    ${hosts}
+                </div>`;
+            }).join('');
+        }
+
+        function importCFPrompt(credPath) {
+            let p = prompt('这份凭证没找到配套的 config 文件，填它的绝对路径：', '');
+            if (p && p.trim()) importCF(credPath, p.trim());
+        }
+
+        async function importCF(credPath, configPath, name) {
+            showMsg('cf-import-msg', '正在导入…', true);
+            try {
+                let res = await fetch('/api/cftunnel/import', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({credentials_path: credPath, config_path: configPath, name: name || ''}),
+                });
+                if (!res.ok) { showMsg('cf-import-msg', '导入失败: ' + await res.text(), false); return; }
+                let d = await res.json();
+                renderCF(d);
+                discoverCF(); // 刷新候选列表，导进来的那条要变成"已接管"
+                showMsg('cf-import-msg', d.message || '已导入', true);
+            } catch (err) {
+                showMsg('cf-import-msg', '导入失败: ' + err, false);
+            }
+        }
+
+        // 云端有、本机还没接管的那些
+        function renderCFOrphans(tunnels) {
+            let box = document.getElementById('cf-orphans');
+            if (!cfRemoteList) { box.classList.add('hidden'); return; }
+            let adopted = new Set(tunnels.map(v => v.cf_id));
+            let orphans = cfRemoteList.filter(r => !adopted.has(r.id));
+            box.classList.toggle('hidden', orphans.length === 0);
+            document.getElementById('cf-orphans-list').innerHTML = orphans.map(r =>
+                `<button onclick="adoptCFTunnel('${r.id}', '${escapeHtml(r.name || '')}')"
+                    class="px-3 py-1.5 rounded-lg border border-amber-300 bg-white text-xs hover:bg-amber-100 transition">
+                    接管 <span class="font-mono">${escapeHtml(r.name || r.id)}</span>
+                </button>`).join('');
+        }
+
+        async function verifyCFToken() {
+            showMsg('cf-settings-msg', '正在验证…', true);
+            try {
+                // 留空 = 验证已经存着的那份
+                let res = await fetch('/api/cftunnel/verify', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({api_token: cfTokenValue()}),
+                });
+                if (!res.ok) { showMsg('cf-settings-msg', '验证失败: ' + await res.text(), false); return; }
+                let d = await res.json();
+                cfAccounts = d.accounts || [];
+                resetCFTokenBox(); // 存下了就别在框里留着
+                renderCF(d);
+                showMsg('cf-settings-msg', `Token 有效，可访问 ${cfAccounts.length} 个账号`, true);
+            } catch (err) {
+                showMsg('cf-settings-msg', '验证失败: ' + err, false);
+            }
+        }
+
+        async function saveCFSettings() {
+            let sel = document.getElementById('cf-account');
+            let body = {
+                api_token: cfTokenValue(),
+                account_id: sel.value,
+                account_name: sel.selectedOptions.length ? sel.selectedOptions[0].textContent : '',
+                binary_path: document.getElementById('cf-binary').value.trim(),
+                download_url: document.getElementById('cf-download').value.trim(),
+            };
+            try {
+                let res = await fetch('/api/cftunnel/settings', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) { showMsg('cf-settings-msg', '保存失败: ' + await res.text(), false); return; }
+                resetCFTokenBox();
+                cfInputBaseline = {};
+                renderCF(await res.json());
+                showMsg('cf-settings-msg', '已保存', true);
+            } catch (err) {
+                showMsg('cf-settings-msg', '保存失败: ' + err, false);
+            }
+        }
+
+        async function clearCFToken() {
+            if (!confirm('清除已保存的 API Token？隧道台账和连接器不受影响，但云端操作（同步、改规则、下 DNS）都会失效。')) return;
+            try {
+                let res = await fetch('/api/cftunnel/settings', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({clear_token: true,
+                        binary_path: document.getElementById('cf-binary').value.trim(),
+                        download_url: document.getElementById('cf-download').value.trim()}),
+                });
+                if (!res.ok) { showMsg('cf-settings-msg', '清除失败: ' + await res.text(), false); return; }
+                resetCFTokenBox();
+                cfAccounts = [];
+                cfRemoteList = null;
+                renderCF(await res.json());
+                showMsg('cf-settings-msg', '已清除', true);
+            } catch (err) {
+                showMsg('cf-settings-msg', '清除失败: ' + err, false);
+            }
+        }
+
+        async function installCFBinary() {
+            showMsg('cf-settings-msg', '开始下载 cloudflared…', true);
+            try {
+                let res = await fetch('/api/cftunnel/binary', {method: 'POST'});
+                if (!res.ok) { showMsg('cf-settings-msg', '下载失败: ' + await res.text(), false); return; }
+                loadCF(); // 进度跟着定时刷新走
+            } catch (err) {
+                showMsg('cf-settings-msg', '下载失败: ' + err, false);
+            }
+        }
+
+        async function syncCF() {
+            showMsg('cf-settings-msg', '正在同步云端隧道…', true);
+            try {
+                let res = await fetch('/api/cftunnel/sync', {method: 'POST'});
+                if (!res.ok) { showMsg('cf-settings-msg', '同步失败: ' + await res.text(), false); return; }
+                let d = await res.json();
+                cfRemoteList = d.remote || [];
+                renderCF(d);
+                showMsg('cf-settings-msg', `云端有 ${cfRemoteList.length} 条隧道`, true);
+            } catch (err) {
+                showMsg('cf-settings-msg', '同步失败: ' + err, false);
+            }
+        }
+
+        async function createCFTunnel(event) {
+            event.preventDefault();
+            let name = document.getElementById('cf-new-name').value.trim();
+            showMsg('cf-create-msg', '正在创建…', true);
+            try {
+                let res = await fetch('/api/cftunnel/tunnels', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name}),
+                });
+                if (!res.ok) { showMsg('cf-create-msg', '创建失败: ' + await res.text(), false); return; }
+                document.getElementById('cf-new-name').value = '';
+                renderCF(await res.json());
+                showMsg('cf-create-msg', `隧道「${name}」已创建，接下来配路由规则并启动连接器`, true);
+            } catch (err) {
+                showMsg('cf-create-msg', '创建失败: ' + err, false);
+            }
+        }
+
+        async function adoptCFTunnel(cfID, name) {
+            try {
+                let res = await fetch('/api/cftunnel/tunnels', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({cf_id: cfID, name}),
+                });
+                if (!res.ok) { alert('接管失败: ' + await res.text()); return; }
+                renderCF(await res.json());
+            } catch (err) {
+                alert('接管失败: ' + err);
+            }
+        }
+
+        async function deleteCFTunnel(id, name) {
+            if (!confirm(`确定移除隧道「${name}」？本机的连接器会先停掉。`)) return;
+            // 默认只解除本地接管：云端删掉就再也接不回来了，得单独确认一次
+            let remote = confirm('同时把 Cloudflare 上的这条隧道也删掉吗？\n\n确定 = 云端一并删除（不可恢复）\n取消 = 只移除本机记录，云端保留');
+            try {
+                let res = await fetch('/api/cftunnel/tunnels?id=' + encodeURIComponent(id) + (remote ? '&remote=1' : ''),
+                    {method: 'DELETE'});
+                if (!res.ok) { alert('删除失败: ' + await res.text()); return; }
+                renderCF(await res.json());
+            } catch (err) {
+                alert('删除失败: ' + err);
+            }
+        }
+
+        async function cfPower(id, action) {
+            try {
+                let res = await fetch('/api/cftunnel/power', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id, action}),
+                });
+                if (!res.ok) { alert((action === 'start' ? '启动失败: ' : '操作失败: ') + await res.text()); }
+                else renderCF(await res.json());
+            } catch (err) {
+                alert('操作失败: ' + err);
+            }
+            loadCF();
+        }
+
+        function selectCFTunnel(id, view) {
+            cfSelected = id;
+            try { localStorage.setItem('nettool-cf-tunnel', id); } catch (err) { /* 隐私模式下忽略 */ }
+            document.getElementById('cf-detail').classList.toggle('hidden', !id);
+            document.getElementById('cf-logs').textContent = '尚无输出';
+            cfLogSeq = 0;
+            document.getElementById('cf-ingress-rows').innerHTML = '';
+            showMsg('cf-ingress-msg', '', true);
+            if (!id) { renderCFTunnels(cfTunnels || []); return; }
+            showCFDetailView(view || cfDetailView);
+            loadCF();
+            loadCFIngress();
+            pollCFLogs();
+            // 表格长了之后详情区可能在屏幕外，点了像没反应
+            requestAnimationFrame(() => document.getElementById('cf-detail')
+                .scrollIntoView({behavior: 'smooth', block: 'nearest'}));
+        }
+
+        // 规则和日志各占整行、来回切：挤在一列里两边都不够宽，
+        // 规则那边一行有域名 + service + 按钮，日志那边动辄一行一百多个字符
+        function showCFDetailView(view) {
+            cfDetailView = view === 'logs' ? 'logs' : 'ingress';
+            try { localStorage.setItem('nettool-cf-view', cfDetailView); } catch (err) { /* 隐私模式下忽略 */ }
+
+            const ON = 'px-3 py-1.5 font-medium bg-indigo-600 text-white';
+            const OFF = 'px-3 py-1.5 font-medium text-gray-600 hover:bg-gray-50';
+            let logs = cfDetailView === 'logs';
+            document.getElementById('cf-pane-ingress').classList.toggle('hidden', logs);
+            document.getElementById('cf-pane-logs').classList.toggle('hidden', !logs);
+            document.getElementById('cf-view-ingress').className = logs ? OFF : ON;
+            document.getElementById('cf-view-logs').className =
+                (logs ? ON : OFF) + ' border-l border-gray-300';
+        }
+
+        // originRequest 里做成表单的那几项；其余的进「其他参数」文本框原样透传
+        const OR_FIELDS = [
+            {key: 'noTLSVerify', type: 'bool', label: '跳过回源证书校验 (noTLSVerify)'},
+            {key: 'disableChunkedEncoding', type: 'bool', label: '禁用分块编码 (disableChunkedEncoding)'},
+            {key: 'http2Origin', type: 'bool', label: '用 HTTP/2 回源 (http2Origin)'},
+            {key: 'httpHostHeader', type: 'text', label: 'Host 头', placeholder: 'internal.local'},
+            {key: 'originServerName', type: 'text', label: '证书里的域名', placeholder: 'origin.example.com'},
+            {key: 'connectTimeout', type: 'text', label: '连接超时', placeholder: '30s'},
+        ];
+
+        function ingressRowHTML(rule) {
+            rule = rule || {};
+            let or = Object.assign({}, rule.originRequest || {});
+
+            // 表单认领的键从 or 里摘走，剩下的丢进「其他参数」，一个都不能丢
+            let fields = OR_FIELDS.map(f => {
+                let v = or[f.key];
+                delete or[f.key];
+                if (f.type === 'bool') {
+                    return `<label class="flex items-center gap-2 text-xs text-gray-600">
+                        <input type="checkbox" class="cf-or rounded" data-key="${f.key}" data-type="bool" ${v ? 'checked' : ''}> ${f.label}
+                    </label>`;
+                }
+                return `<div>
+                    <label class="block text-xs text-gray-500 mb-1">${f.label}</label>
+                    <input type="text" class="cf-or w-full px-2 py-1 border rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        data-key="${f.key}" data-type="text" placeholder="${f.placeholder}" value="${escapeHtml(v == null ? '' : v)}">
+                </div>`;
+            }).join('');
+
+            let extra = Object.keys(or).length ? JSON.stringify(or, null, 2) : '';
+            let advOpen = extra || Object.keys(rule.originRequest || {}).length ? ' open' : '';
+
+            return `<div class="cf-ing-row border rounded-lg px-3 py-2">
+                <div class="flex flex-wrap gap-2 items-center">
+                    <input type="text" class="cf-ing-host flex-1 min-w-[9rem] px-2 py-1.5 border rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="app.example.com（留空=兜底）" value="${escapeHtml(rule.hostname || '')}">
+                    <input type="text" class="cf-ing-path w-24 px-2 py-1.5 border rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="路径(可选)" value="${escapeHtml(rule.path || '')}">
+                    <input type="text" class="cf-ing-service flex-1 min-w-[9rem] px-2 py-1.5 border rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="http://127.0.0.1:8090" value="${escapeHtml(rule.service || '')}">
+                    <button type="button" onclick="attachCFDNS(this)" class="text-xs text-indigo-600 hover:text-indigo-800 px-1">下 DNS</button>
+                    <button type="button" onclick="detachCFDNS(this)" class="text-xs text-gray-400 hover:text-gray-600 px-1" title="删掉这个域名指向本隧道的 CNAME 记录">删 DNS</button>
+                    <button type="button" onclick="removeIngressRow(this)" class="text-xs text-red-500 hover:text-red-700 px-1">×</button>
+                </div>
+                <details class="mt-2"${advOpen}>
+                    <summary class="cursor-pointer select-none text-xs text-gray-400 hover:text-gray-600">高级 (originRequest)</summary>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">${fields}</div>
+                    <div class="mt-2">
+                        <label class="block text-xs text-gray-500 mb-1">其他参数 (JSON，留空=没有)</label>
+                        <textarea class="cf-or-extra w-full px-2 py-1 border rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            rows="2" placeholder='{"proxyType": "socks"}'>${escapeHtml(extra)}</textarea>
+                    </div>
+                </details>
+            </div>`;
+        }
+
+        function addIngressRow(rule) {
+            document.getElementById('cf-ingress-rows').insertAdjacentHTML('beforeend', ingressRowHTML(rule));
+        }
+
+        function renderIngress(rules) {
+            let box = document.getElementById('cf-ingress-rows');
+            box.innerHTML = (rules || []).map(r => ingressRowHTML(r)).join('');
+            if (!rules || !rules.length) addIngressRow({service: 'http://127.0.0.1:8090'});
+        }
+
+        // 把一行里的 originRequest 收成一个对象；JSON 写错了当场抛出去，不静默丢掉
+        function collectOriginRequest(row) {
+            let or = {};
+            let extra = row.querySelector('.cf-or-extra').value.trim();
+            if (extra) {
+                let parsed;
+                try {
+                    parsed = JSON.parse(extra);
+                } catch (err) {
+                    throw new Error('「其他参数」不是合法 JSON: ' + err.message);
+                }
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                    throw new Error('「其他参数」要是一个 JSON 对象，如 {"proxyType":"socks"}');
+                }
+                Object.assign(or, parsed);
+            }
+            row.querySelectorAll('.cf-or').forEach(el => {
+                if (el.dataset.type === 'bool') {
+                    if (el.checked) or[el.dataset.key] = true;
+                } else if (el.value.trim()) {
+                    or[el.dataset.key] = el.value.trim();
+                }
+            });
+            return Object.keys(or).length ? or : undefined;
+        }
+
+        async function loadCFIngress() {
+            if (!cfSelected) return;
+            showMsg('cf-ingress-msg', '正在从 Cloudflare 拉取规则…', true);
+            try {
+                let res = await fetch('/api/cftunnel/ingress?id=' + encodeURIComponent(cfSelected));
+                if (!res.ok) { showMsg('cf-ingress-msg', '拉取失败: ' + await res.text(), false); return; }
+                let d = await res.json();
+                renderIngress(d.ingress);
+                showMsg('cf-ingress-msg', '', true);
+            } catch (err) {
+                showMsg('cf-ingress-msg', '拉取失败: ' + err, false);
+            }
+        }
+
+        function collectIngress() {
+            return Array.from(document.querySelectorAll('#cf-ingress-rows .cf-ing-row')).map(row => ({
+                hostname: row.querySelector('.cf-ing-host').value.trim(),
+                path: row.querySelector('.cf-ing-path').value.trim(),
+                service: row.querySelector('.cf-ing-service').value.trim(),
+                originRequest: collectOriginRequest(row),
+            }));
+        }
+
+        async function saveCFIngress() {
+            if (!cfSelected) return;
+            let rules;
+            try {
+                rules = collectIngress();
+            } catch (err) {
+                showMsg('cf-ingress-msg', err.message, false);
+                return;
+            }
+            showMsg('cf-ingress-msg', '正在保存…', true);
+            try {
+                let res = await fetch('/api/cftunnel/ingress', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id: cfSelected, ingress: rules}),
+                });
+                if (!res.ok) { showMsg('cf-ingress-msg', '保存失败: ' + await res.text(), false); return; }
+                let d = await res.json();
+                renderIngress(d.ingress);
+                showMsg('cf-ingress-msg', d.message || '已保存，连接器几秒内自动生效', true);
+                if (d.message) loadCF();
+            } catch (err) {
+                showMsg('cf-ingress-msg', '保存失败: ' + err, false);
+            }
+        }
+
+        async function attachCFDNS(btn) {
+            let hostname = btn.closest('.cf-ing-row').querySelector('.cf-ing-host').value.trim();
+            if (!hostname) { showMsg('cf-ingress-msg', '这一行还没填域名', false); return; }
+            showMsg('cf-ingress-msg', `正在给 ${hostname} 下 CNAME…`, true);
+            try {
+                let res = await fetch('/api/cftunnel/dns', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id: cfSelected, hostname}),
+                });
+                let text = await res.text();
+                if (!res.ok) { showMsg('cf-ingress-msg', '下发失败: ' + text, false); return; }
+                showMsg('cf-ingress-msg', `${hostname}: ${JSON.parse(text).message}`, true);
+            } catch (err) {
+                showMsg('cf-ingress-msg', '下发失败: ' + err, false);
+            }
+        }
+
+        // 删掉 hostname 指向本隧道的 CNAME。后端只删确认指着本隧道的那条，
+        // 指向别处的记录会报错退回来，不会误删。
+        // 成功失败都当面说一声：这一步常常是跟着「删规则」一起做的，那时候规则行已经
+        // 从界面上消失了，光在下面留一行小字很容易被当成"都办妥了"划过去。
+        async function deleteCFDNS(hostname) {
+            showMsg('cf-ingress-msg', `正在删 ${hostname} 的 CNAME…`, true);
+            try {
+                let res = await fetch('/api/cftunnel/dns?id=' + encodeURIComponent(cfSelected)
+                    + '&hostname=' + encodeURIComponent(hostname), {method: 'DELETE'});
+                let text = await res.text();
+                if (!res.ok) {
+                    showMsg('cf-ingress-msg', `${hostname} 的解析没有删掉: ${text}`, false);
+                    alert(`${hostname} 的 DNS 解析删除失败\n\n${text}\n\n记录还在，该域名仍然解析到这条隧道。`);
+                    return;
+                }
+                let msg = JSON.parse(text).message || '已删除';
+                showMsg('cf-ingress-msg', `${hostname}: ${msg}`, true);
+                alert(`${hostname} 的 DNS 解析已处理\n\n${msg}`);
+            } catch (err) {
+                showMsg('cf-ingress-msg', `${hostname} 的解析没有删掉: ${err}`, false);
+                alert(`${hostname} 的 DNS 解析删除失败\n\n${err}`);
+            }
+        }
+
+        async function detachCFDNS(btn) {
+            let hostname = btn.closest('.cf-ing-row').querySelector('.cf-ing-host').value.trim();
+            if (!hostname) { showMsg('cf-ingress-msg', '这一行还没填域名', false); return; }
+            if (!confirm(`删掉 ${hostname} 指向本隧道的 CNAME 记录？\n\n`
+                + '规则不受影响，域名将不再解析到这条隧道。')) return;
+            await deleteCFDNS(hostname);
+        }
+
+        // 删规则行时问一句要不要顺带收掉 CNAME：两者是分开存的，规则删了记录还在，
+        // 域名照样打进隧道、匹配不到规则、回 404。
+        function removeIngressRow(btn) {
+            let row = btn.closest('.cf-ing-row');
+            let hostname = row.querySelector('.cf-ing-host').value.trim();
+            row.remove();
+            if (!hostname) return;
+            if (!confirm(`这一行删掉了。要顺带把 ${hostname} 的 CNAME 记录也删掉吗？\n\n`
+                + '确定 = 一并删除解析记录（立即生效，不用等保存）\n'
+                + '取消 = 只删规则，解析记录保留（该域名之后会回 404）')) return;
+            deleteCFDNS(hostname);
+        }
+
+        // 日志是增量取的：只要 seq 比上次大的那些，接在后面
+        async function appendLogs(url, boxID, seq, onSeq) {
+            try {
+                let d = await (await fetch(url + '&after=' + seq)).json();
+                let lines = d.lines || [];
+                if (!lines.length) return;
+                let box = document.getElementById(boxID);
+                let atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+                let text = lines.map(l => new Date(l.time).toLocaleTimeString('zh-CN', {hour12: false}) + '  ' + l.text).join('\n');
+                box.textContent = (seq === 0 ? '' : box.textContent + '\n') + text;
+                onSeq(lines[lines.length - 1].seq);
+                if (atBottom) box.scrollTop = box.scrollHeight; // 用户往上翻着看时别把他拽回来
+            } catch (err) { /* 日志读不到不值得打扰用户 */ }
+        }
+
+        function pollCFLogs() {
+            if (!cfSelected) return;
+            appendLogs('/api/cftunnel/logs?id=' + encodeURIComponent(cfSelected), 'cf-logs', cfLogSeq, s => cfLogSeq = s);
+        }
+
+        function pollQuickLogs() {
+            appendLogs('/api/cftunnel/logs?id=quick', 'cf-quick-logs', cfQuickLogSeq, s => cfQuickLogSeq = s);
+        }
+
+        function renderCFQuick(q) {
+            let running = !!q.running;
+            document.getElementById('cf-quick-start').classList.toggle('hidden', running);
+            document.getElementById('cf-quick-stop').classList.toggle('hidden', !running);
+
+            let link = document.getElementById('cf-quick-url');
+            if (q.url) {
+                link.textContent = q.url;
+                link.href = q.url;
+            } else {
+                link.textContent = running ? '正在申请…' : '-';
+                link.removeAttribute('href');
+            }
+            document.getElementById('cf-quick-state').textContent = running
+                ? `运行中 · ${formatInterval(q.uptime_seconds || 0)} · → ${q.target || ''}`
+                : (q.last_exit || '');
+        }
+
+        async function startQuickTunnel(event) {
+            event.preventDefault();
+            let target = document.getElementById('cf-quick-target').value.trim();
+            showMsg('cf-quick-msg', '正在启动…', true);
+            document.getElementById('cf-quick-logs').textContent = '';
+            cfQuickLogSeq = 0;
+            try {
+                let res = await fetch('/api/cftunnel/quick', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action: 'start', target}),
+                });
+                if (!res.ok) { showMsg('cf-quick-msg', '启动失败: ' + await res.text(), false); return; }
+                showMsg('cf-quick-msg', '已启动，临时域名要等几秒才会出现', true);
+                renderCFQuick((await res.json()).quick || {});
+            } catch (err) {
+                showMsg('cf-quick-msg', '启动失败: ' + err, false);
+            }
+        }
+
+        async function stopQuickTunnel() {
+            try {
+                let res = await fetch('/api/cftunnel/quick', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action: 'stop'}),
+                });
+                if (!res.ok) { showMsg('cf-quick-msg', '停止失败: ' + await res.text(), false); return; }
+                showMsg('cf-quick-msg', '已停止，那个临时域名已经作废', true);
+                renderCFQuick((await res.json()).quick || {});
+            } catch (err) {
+                showMsg('cf-quick-msg', '停止失败: ' + err, false);
+            }
+        }
+
         // Initial load
         let savedTab = null;
         try { savedTab = localStorage.getItem('nettool-active-tab'); } catch (err) { /* 隐私模式下忽略 */ }
@@ -3013,6 +4142,15 @@ ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000</pre>
         // DNS 页只刷统计和最近查询，不动正在编辑的配置输入框
         setInterval(() => {
             if (activeTab === 'dns') loadDNSStats();
+        }, 3000);
+
+        // CF 隧道页只刷本地状态（隧道台账、连接器、下载进度）与日志增量，
+        // 云端那几趟请求只在点按钮时才发
+        setInterval(() => {
+            if (activeTab !== 'cf') return;
+            loadCF();
+            pollCFLogs();
+            pollQuickLogs();
         }, 3000);
 
         // 诊断在后台跑，停在该页且任务没结束时每秒取一次增量结果

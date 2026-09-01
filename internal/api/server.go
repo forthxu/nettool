@@ -56,6 +56,23 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("/api/diag/job", handleDiagJob)
 	mux.HandleFunc("/api/diag/stop", handleDiagStop)
 
+	// Cloudflare Tunnel（云端隧道管理 + 本地 cloudflared 连接器）
+	mux.HandleFunc("/api/cftunnel", handleCFTunnel)
+	mux.HandleFunc("/api/cftunnel/settings", handleCFSettings)
+	mux.HandleFunc("/api/cftunnel/token", handleCFToken)
+	mux.HandleFunc("/api/cftunnel/verify", handleCFVerify)
+	mux.HandleFunc("/api/cftunnel/sync", handleCFSync)
+	mux.HandleFunc("/api/cftunnel/tunnels", handleCFTunnels)
+	mux.HandleFunc("/api/cftunnel/discover", handleCFDiscover)
+	mux.HandleFunc("/api/cftunnel/import", handleCFImport)
+	mux.HandleFunc("/api/cftunnel/power", handleCFPower)
+	mux.HandleFunc("/api/cftunnel/logs", handleCFLogs)
+	mux.HandleFunc("/api/cftunnel/ingress", handleCFIngress)
+	mux.HandleFunc("/api/cftunnel/zones", handleCFZones)
+	mux.HandleFunc("/api/cftunnel/dns", handleCFDNS)
+	mux.HandleFunc("/api/cftunnel/binary", handleCFBinary)
+	mux.HandleFunc("/api/cftunnel/quick", handleCFQuick)
+
 	// 本地 DNS 服务
 	mux.HandleFunc("/api/dns", handleDNSConfig)
 	mux.HandleFunc("/api/dns/power", handleDNSPower)

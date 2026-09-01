@@ -13,6 +13,7 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 | **路由管理** | 上半部分是**出口线路**（决定某个代理实例走哪个网关：Linux 策略路由 / macOS PF route-to）；下半部分按网段或域名下发系统路由指向某个网关，带台账、启动对账、定时重解析、暂停/恢复 | `/api/uplinks*`、`/api/capabilities`、`/api/routes*`、`/api/system-routes` |
 | **网卡配置** | 改本机网卡的 IP / 掩码 / 网关 / DNS，并按连上的 Wi-Fi 自动套用配置档 | `/api/net/*` |
 | **DNS 服务** | 本机 DNS 解析器：UDP/TCP/DoT/DoH 上游、按域名分流、缓存、静态记录 | `/api/dns*` |
+| **CF 隧道** | Cloudflare Tunnel：调 API 在云端建/删隧道、改 ingress 规则、下 DNS 记录，本机托管 cloudflared 连接器；已经在用 `tunnel create` + config.yml 的可以一键导入接着用；另有不需要账号的临时隧道 | `/api/cftunnel*` |
 | **Ping** | ICMP 连通性测试，可指定源 IP —— 同一个目标换条线路试，结果一目了然 | `/api/diag/ping` |
 | **路由追踪** | traceroute，逐跳看流量实际经过哪些路由器，同样可指定源 IP | `/api/diag/traceroute` |
 
@@ -21,8 +22,8 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 贯穿全局的几件事：
 
 - **Web 后台登录认证**：`-user` / `-pass` 开启 HTTP Basic Auth，保护控制台与全部 API；两个都留空则不鉴权。
-- **按上次的状态启动**：SOCKS5 代理和 DNS 服务的开关状态跟着配置一起存盘，进程重启（升级、崩溃、机器重启）后照着上次退出前的样子恢复——上次开着就自动起来，上次点过「停止」就保持停止，不用每次再去后台点一次。全新安装（还没有配置文件）时两者都不启动，避免装好就抢端口；`-start-proxy` / `-start-dns` 则是无条件启动，不看上次状态。
-- **配置各自独立成 JSON**：路由台账、出口线路台账、Wi-Fi 配置档、DNS 配置、代理配置五份文件互不干扰，一律先写临时文件再原子替换，掉电不会留下半个文件。
+- **按上次的状态启动**：SOCKS5 代理、DNS 服务与各条 Cloudflare 隧道的开关状态跟着配置一起存盘，进程重启（升级、崩溃、机器重启）后照着上次退出前的样子恢复——上次开着就自动起来，上次点过「停止」就保持停止，不用每次再去后台点一次。全新安装（还没有配置文件）时都不启动，避免装好就抢端口；`-start-proxy` / `-start-dns` / `-start-cftunnel` 则是无条件启动，不看上次状态。
+- **配置各自独立成 JSON**：路由台账、出口线路台账、Wi-Fi 配置档、DNS 配置、代理配置、隧道配置六份文件互不干扰，一律先写临时文件再原子替换，掉电不会留下半个文件。其中 `cftunnel.json` 里有机密（Cloudflare API Token 与各隧道的连接器令牌），权限是 `0600` 而不是 `0644`。
 - **系统服务模板**：`deploy/` 下有 Linux systemd、OpenWrt procd 与 Windows 计划任务三份配置，开机自启 + 崩溃自动重启。
 - **不认本地化文案**：Windows 的 `netsh` / `route` 输出跟着系统语言走（中文版打印的是「接口 xxx 的配置」「在链路上」），所以那边的读取一律走 PowerShell 的 `Get-Net*`（属性名与枚举值固定）或只认数据行的形状，中文系统上一样能用。
 
@@ -267,7 +268,111 @@ pfctl -a com.apple/nettool -s rules
 
 ---
 
-## 六、连通性诊断（Ping / 路由追踪）
+## 六、Cloudflare 隧道（内网服务对外发布）
+
+前面几件事都在管「出去的流量走哪条线」，这一页管反方向：**让外面能进来，而不开任何入站端口**。
+
+cloudflared 从本机主动连到 Cloudflare 边缘并保持住几条长连接，外部请求先到 Cloudflare，再顺着这几条连接送进来。所以不需要公网 IP、不需要在路由器上做端口映射，运营商封不封 80/443 入站都无所谓——防火墙只看到几条普通的出站 HTTPS。
+
+### 两头都在这一页
+
+- **云端**：用你的 Cloudflare API Token 调 REST 接口，建/删隧道、改 ingress 规则、下 DNS 记录。
+- **本地**：托管 cloudflared 连接器进程，启停、日志、按上次的开关状态恢复。
+
+### 只走云端托管
+
+cloudflared 的隧道有两种托管方式，是隧道自身在 Cloudflare 那边的一个属性（`config_src`）：
+
+| | **云端**（`config_src=cloudflare`） | **本地**（`config_src=local`） |
+| --- | --- | --- |
+| ingress 规则存哪 | Cloudflare 那边 | 本机的 config.yml 里 |
+| 规则怎么到连接器手上 | 连上之后顺着隧道下发，改完几秒生效、不用重启 | 启动时读一次文件，改完要重启 |
+| 本地要什么 | 一个连接器令牌 | config.yml + 凭证文件 |
+| 启动命令 | `cloudflared tunnel run`（令牌走 `TUNNEL_TOKEN` 环境变量） | `cloudflared --config <文件> tunnel run` |
+
+**本工具只做云端托管这一种。** 好处是本机不用维护配置文件、改规则不用重启、换台机器填个令牌就接着跑；代价是断网时看不了规则（要调 API 才读得到），也没法把规则丢进 git 做版本管理。
+
+⚠️ **`config_src` 不会覆盖本地文件**。它决定的是"云端存的那份算不算数"，不是"云端优先"。实测：一条 `config_src=cloudflare` 的隧道，用 `cloudflared --config <带 ingress 的文件> tunnel run` 启动，生效的仍然是**文件里的规则**，云端那份对这个进程完全无效。
+
+所以隧道转成云端托管之后，**必须把带 `--config` 的启动方式一起改掉**（去掉 `--config`，改成令牌走 `TUNNEL_TOKEN`），否则界面上改的规则一条都不会生效——而界面、云端、`cloudflared tunnel info` 看起来全都是对的。
+
+### 导入本机已经在跑的隧道
+
+已经在用 `cloudflared tunnel create` + 手写 config 那一套的，「导入本机已有的隧道」把它一次性搬过来：扫 `~/.cloudflared/*.json`（`tunnel create` 留下的凭证）和几个常见目录里的 config 文件，按 `credentials-file` 把两者配上对，点「导入并迁规则」——隧道接管到本机台账，config 里的 ingress 整份推到云端。凭证或 config 放在非标准位置（比如 `/opt/cloudflared/tunnel/`）就把目录填进输入框再扫。
+
+**接管隧道这一步不需要 API Token，也不联网**：凭证文件 `~/.cloudflared/<UUID>.json` 里的 `{AccountTag, TunnelID, TunnelSecret}` 和连接器令牌装的是同一份秘密——令牌就是这三样拼成 `{"a","t","s"}` 再 base64，扫到凭证就能算出令牌。要 Token 的是**把规则迁到云端**那一步；只想先把隧道接过来的话点「只接管」，规则之后再填。
+
+**你那个 config 文件本工具从不写**，只在导入时读一遍。那种文件通常有注释、有注释掉的备用规则，还被开机脚本引用着，重写它去换一个不再生效的东西不划算。DNS 记录本来就在云端，导入不用动它们。
+
+命令行与这一页的对应关系：
+
+| 你原来的命令 | 这一页 |
+| --- | --- |
+| `cloudflared login` | 填一次 API Token（`cert.pem` 本工具用不上） |
+| `cloudflared tunnel create <名字>` | 「在 Cloudflare 上创建」——只在要**新**隧道时点，不是每次 |
+| `cloudflared tunnel list` | 「同步云端」 |
+| 已经建好的隧道 | 「导入本机已有的隧道」或同步后「接管」，不会重建 |
+| `cloudflared tunnel route dns <隧道> <域名>` | ingress 表里每行的「下 DNS」，一个域名点一次 |
+| config.yml 里的 `ingress:` | ingress 规则表（导入时一次性迁到云端） |
+| `cloudflared --config … tunnel run` | 「启动」（不带 `--config`，改成令牌走环境变量） |
+
+⚠️ **同一条隧道别跑两个连接器**。如果你的 systemd/procd 脚本还在跑着同一条隧道，本工具再起一个就是两个连接器——Cloudflare 允许（当成高可用副本），请求走哪个是边缘定的。**两个连接器规则来源不一样时这会很难查**：旧的读文件、新的读云端，同一个域名可能通也可能 404，取决于请求落在谁身上，而云端和界面看起来完全正常。隧道在云端能看到连接数，一个 cloudflared 建 4 条，`8` 就说明有两个。
+
+### 准备：API Token 与 cloudflared
+
+- Token 在 <https://dash.cloudflare.com/profile/api-tokens>（右上角头像 → *My Profile* → *API Tokens*）里建，选 **Create Custom Token**，两项权限：
+
+  ```text
+  Account · Cloudflare Tunnel : Edit     建/删隧道、读写 ingress 规则
+  Zone    · DNS               : Edit     下指向隧道的 CNAME
+  ```
+
+  *Zone Resources* 选上要用的域名（可以只给一个），*Account Resources* 选你的账号。建好后**只显示一次**，复制下来填进界面点「验证并读取账号」，账号只有一个时会自动选上。读不出域名列表的话再补一项 `Zone · Zone : Read`。
+
+  > 这样建出来的 Token **列不出账号**：`/accounts` 会回一个空数组（列账号要的是 `Account Settings : Read`，上面两项都不含它），但账号级的隧道接口是好使的——"有账号权限"和"能列出账号"是两回事。所以「验证并读取账号」在 `/accounts` 空手而归时会从 `/zones` 里把 `account.id` 问出来，不用为此多授一项权限。名下一个域名都没有时才会提示补 `Account Settings : Read`。
+
+  **不要用 Global API Key**——那个等于账户密码，能改账单、能删域名，权限没法收窄。Token 则可以只授一个 zone，还能设过期时间。
+
+- **跑隧道不需要 Token**：连接器只认令牌。没配 Token 时启停、看日志、导入都照常用，只有建隧道、改规则、下 DNS 会提示要先配。
+- 本工具是单二进制、无外部依赖的，但连接器用的是 Cloudflare 未公开的私有协议，没有第三方实现，只能调官方的 `cloudflared`。查找顺序是**手动指定的路径 → 本程序装的托管目录 → PATH**；都没有就点「下载安装」，从 GitHub Releases 拉本平台的包（macOS 发的是 `.tgz`，会解出里面的可执行文件），装到配置文件旁边的 `bin/`。连不上 GitHub 时可以在「下载地址」里换成镜像（填到目录一级，文件名按平台自动拼）。
+- 下载完先跑一次 `--version` 确认真的能用，再原子替换到位——拉到半个文件或一个 HTML 错误页时会在这一步被拦住，而不是等你点启动才发现。
+- **升级（覆盖安装）时不用先停隧道**。Unix 上覆盖一个正在跑的二进制没问题（进程握着的是 inode，换掉的是目录项）；Windows 会锁住正在运行的 exe，所以那边改成"把旧的挪到 `.old` 再把新的放上去"，`.old` 下次安装时清理。两边正在跑的连接器用的都还是旧版本，**重启它们才会换过去**，装完会在界面上提示还有几个没换。
+
+### 隧道
+
+- **新建**：填个名字点「在 Cloudflare 上创建」，隧道建在云端、连接器令牌拉回本地。
+- **接管已有的**：点「同步云端」把账号下的隧道列出来，本机还没接管的会在列表下方给一排「接管」按钮，点一下就把它的连接器令牌拉回来。同步还会跟上云端的改名，并把在 Cloudflare 后台已经删掉的标成「云端已删除」——而不是装作它还在。
+- **启停**：每条隧道一个 cloudflared 进程，界面上看得到运行状态、已运行多久、最近一次退出的原因，以及最近 400 行输出（停在该页时每 3 秒续读增量）。
+- **删除**：默认只解除本机接管，云端保留；要连云端一起删会再确认一次。顺序是**先停本地连接器再删云端**——反过来会得到「隧道上还有活动连接」而不是把它删掉。
+- **重拉令牌**：在 Cloudflare 后台轮换过令牌之后用。
+
+### 路由规则（ingress）与 DNS
+
+- 规则是一张有序表，从上往下匹配，第一条命中的生效；`service` 形如 `http://127.0.0.1:8090`、`tcp://127.0.0.1:3306`、`ssh://127.0.0.1:22`、`unix:/var/run/app.sock`，也支持 `http_status:404`、`hello_world`、`bastion`。写错的前缀在保存时就会被拦下——否则 Cloudflare 会照单全收，然后每个请求都 502，从界面上看不出原因。
+- **最后一条必须是兜底规则**（不带域名），缺了整份配置会被 Cloudflare 拒收，所以保存时自动补一条 `http_status:404`；把兜底规则写在中间会直接报错，因为它后面的规则永远匹配不到。
+- 填好域名后点那一行的「下 DNS」，会在对应的 Cloudflare 域名下建一条指向 `<隧道ID>.cfargotunnel.com` 的 **CNAME 并开橙云**——这个地址只有经过 Cloudflare 边缘才解析得到，灰云的话外面查到的是 NXDOMAIN。已有同名 CNAME 是**改**而不是加（同名多条 CNAME 会被 Cloudflare 拒收）；已有同名的 A/AAAA 记录则拒绝动它并说明原因。域名归属按**最长后缀**挑 zone：同时托管了 `example.com` 和 `lab.example.com` 时，`app.lab.example.com` 会下到后者。这一步走 API，需要 Token。
+- **`originRequest`（回源参数）**在每条规则的「高级」里：`noTLSVerify`（本机服务是自签证书时要开）、`httpHostHeader`、`originServerName`、`connectTimeout`、`disableChunkedEncoding`、`http2Origin` 做成了表单，另有一个「其他参数」JSON 框兜住 cloudflared 的其余几十个参数（原样透传，由 Cloudflare 校验）。表单里那几项会校验类型——写成 `"noTLSVerify": "true"`（字符串）Cloudflare 会照收，然后这条规则的每个请求都失败，界面上完全看不出是参数写错了。字段名在 Cloudflare API 与 config.yml 里都叫 `originRequest`，所以从 config 导入时原样搬过来就行。
+
+### 快速隧道（TryCloudflare）
+
+不需要账号、不需要域名、不需要令牌：填一个本地服务地址就能开，Cloudflare 现分一个 `*.trycloudflare.com` 给你（那个域名只出现在启动横幅里，是从进程输出里抓出来的）。进程一停域名就作废。适合临时把内网服务给别人看一眼——⚠️ 它**没有任何访问控制**，别拿它挂长期服务。
+
+### 安全与存活
+
+- **连接器令牌等于这条隧道的密码**，拿到它的人就能把隧道接到自己机器上。所以它只存在权限 `0600` 的 `cftunnel.json` 里，接口一律不返回（只说有没有），启动 cloudflared 时走环境变量 `TUNNEL_TOKEN` 而不是命令行参数——命令行在同一台机器上是人人可见的（`ps`、`/proc/*/cmdline`）。API Token 存法一样，界面上默认也只显示脱敏值（框里摆一串圆点，保存时留空表示「不改动」），但输入框右边那个**小眼睛**能把明文调出来（`GET /api/cftunnel/token`）——换机器时总得能把它抄走。每读一次日志里都记一行。连接器令牌没有这个口子。⚠️ 这个接口和界面上别的东西一样没有额外的门：没配 `-user`/`-pass` 时，能打开这个页面的人本来就能改隧道、下 DNS，放在不可信网络上请开认证。
+- **自动重启只对「活过一分钟的」生效**。cloudflared 自己扛住网络抖动（断线重连都在它内部，进程不退），所以进程真的退出基本只有两种：令牌或参数不对（起来几秒就死，重试多少次都一样），或者被外力杀掉。于是规则定成只有活过 60 秒的意外退出才自动拉起来（5 秒后重试，最多 10 次），短命的直接停下、把最后几行日志留在界面上。
+- **退出时会先收掉连接器**。收到 `SIGTERM`/`SIGINT` 时先请各个 cloudflared 优雅退出（最多等 8 秒）再走，否则它们会变成孤儿继续挂着隧道，下次启动就成了同一条隧道跑两个连接器。
+- 隧道配置存成独立 JSON（默认与路由台账同目录的 `cftunnel.json`，可用 `-cftunnel-file` 指定）；各隧道的开关意愿跟着存盘，进程重启后照上次的样子恢复，加 `-start-cftunnel` 则无条件全部拉起。
+
+### 接口
+
+`GET /api/cftunnel`（概览：设置、二进制状态、隧道列表、快速隧道）、`POST /api/cftunnel/settings`、`GET /api/cftunnel/token`（明文 API Token，给小眼睛用）、`POST /api/cftunnel/verify`、`POST /api/cftunnel/sync`、`POST|DELETE /api/cftunnel/tunnels`、`GET /api/cftunnel/discover?dir=<额外目录>`、`POST /api/cftunnel/import {credentials_path, config_path}`（`config_path` 留空表示只接管、不迁规则）、`POST /api/cftunnel/power {id, action: start|stop|refresh-token}`、`GET /api/cftunnel/logs?id=<id|quick>&after=<seq>`、`GET|POST /api/cftunnel/ingress`、`GET /api/cftunnel/zones`、`POST /api/cftunnel/dns {id, hostname}`、`DELETE /api/cftunnel/dns?id=&hostname=`（只删确认指向本隧道的那条 CNAME）、`GET|POST /api/cftunnel/binary`、`POST /api/cftunnel/quick {action, target}`。
+
+其中 `discover` 与 `import` 只读本机文件、不联网，没配 API Token 也能用。
+
+---
+
+## 七、连通性诊断（Ping / 路由追踪）
 
 前面几件事都在决定「流量走哪条线」，这两页用来验证它到底走没走成。
 
@@ -345,6 +450,18 @@ nettool/
 │   │   ├── message.go    # DNS 报文工具
 │   │   ├── server.go     # 监听与生命周期、测试解析
 │   │   └── config.go     # 配置持久化
+│   ├── cftunnel/     # Cloudflare Tunnel（云端管理 + 本地连接器）
+│   │   ├── model.go      # 隧道/设置/ingress 规则模型与校验
+│   │   ├── cfapi.go      # Cloudflare REST 客户端（隧道、配置、DNS）
+│   │   ├── manager.go    # 台账增删、启停、云端对账、导入、快速隧道
+│   │   ├── credentials.go # 从 cloudflared 凭证文件算出连接器令牌
+│   │   ├── cfdconfig.go  # 只读解析 cloudflared 的 config.yml（导入用）
+│   │   ├── discover.go   # 扫出本机已有的隧道（凭证 + config 配对）
+│   │   ├── process.go    # cloudflared 子进程托管：日志环、优雅退出、自动重启
+│   │   ├── install.go    # 二进制探测与一键下载安装（含 macOS tgz 解包）
+│   │   ├── terminate_unix.go     # SIGTERM 请它自己收摊
+│   │   ├── terminate_windows.go  # 这个平台没有信号，只能强杀
+│   │   └── config.go     # 配置持久化（0600，里面是机密）
 │   ├── netconfig/    # 网卡配置与 Wi-Fi 自动切换
 │   │   ├── nic.go        # 配置模型、校验、下发命令拼装
 │   │   ├── nicread.go    # 读取当前网卡配置（macOS networksetup / Linux nmcli / Windows netsh 回落）
@@ -366,6 +483,7 @@ nettool/
 │       ├── proxy.go      # /api/status、/api/proxy、/api/stats、/api/egress-ip
 │       ├── net.go        # /api/net/*
 │       ├── dns.go        # /api/dns/*
+│       ├── cftunnel.go   # /api/cftunnel/*
 │       └── diag.go       # /api/diag/*
 ├── Makefile          # 多平台一键编译脚本
 ├── deploy/
@@ -373,7 +491,7 @@ nettool/
 │   ├── nettool.init         # OpenWrt Procd 初始化脚本模板
 │   └── nettool-windows.ps1  # Windows 计划任务（开机自启）安装脚本
 ├── static/
-│   └── index.html    # 嵌入式响应式 Web 管理前端（六个页签）
+│   └── index.html    # 嵌入式响应式 Web 管理前端（七个页签）
 └── README.md         # 项目说明文档
 ```
 
@@ -442,6 +560,13 @@ sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_passw
 - `-dns-port`: 监听端口（留空沿用配置文件里的值，默认 `53`，需要 root）
 - `-dns-upstream`: 上游列表，逗号分隔，如 `223.5.5.5,tls://dns.alidns.com,https://doh.pub/dns-query`；**仅在配置文件里还没有上游时生效**，否则每次带参数启动都会冲掉后台调好的列表
 - `-dns-config-file`: DNS 服务配置文件路径（留空则与路由台账同目录的 `dns.json`）
+
+**Cloudflare 隧道**
+
+- `-start-cftunnel`: 启动时**无条件**拉起全部隧道的 cloudflared 连接器；不加则按各隧道上次退出前的开关状态恢复
+- `-cftunnel-file`: 隧道配置文件路径（留空则与路由台账同目录的 `cftunnel.json`）。里面有 Cloudflare API Token 与各隧道的连接器令牌，文件权限是 `0600`
+
+> API Token、账号、隧道与 ingress 规则都在 Web 后台配，没有对应的命令行参数——它们是要在界面上反复改的东西，写进启动参数只会和存档打架。
 
 > Ping 与路由追踪没有命令行参数，全部在 Web 后台按次发起。
 
@@ -624,9 +749,53 @@ sudo kill -9 $(pgrep nettool); sudo ./nettool & sleep 2; ip rule show
 sudo ./nettool -uplink-cleanup
 ```
 
+### Cloudflare 隧道
+
+```bash
+# 概览：设置、cloudflared 状态、隧道列表、快速隧道（不联网，可以随便刷）
+curl -s http://127.0.0.1:8090/api/cftunnel
+
+# 导入本机已经在跑的隧道：扫描（不联网）→ 接管并把 config 里的规则迁到云端（要 Token）
+curl -s 'http://127.0.0.1:8090/api/cftunnel/discover?dir=/opt/cloudflared/tunnel'
+curl -s -X POST http://127.0.0.1:8090/api/cftunnel/import \
+  -H 'Content-Type: application/json' \
+  -d '{"credentials_path":"/root/.cloudflared/<UUID>.json","config_path":"/etc/cloudflared/mytunnel.yml"}'
+
+# 只接管、不迁规则：config_path 留空，这样连 Token 都不用
+curl -s -X POST http://127.0.0.1:8090/api/cftunnel/import \
+  -H 'Content-Type: application/json' \
+  -d '{"credentials_path":"/root/.cloudflared/<UUID>.json"}'
+
+# 填 Token 并读账号
+curl -s -X POST http://127.0.0.1:8090/api/cftunnel/verify \
+  -H 'Content-Type: application/json' -d '{"api_token":"你的-Token"}'
+
+# 拉云端隧道列表（本地没接管的也在里面）
+curl -s -X POST http://127.0.0.1:8090/api/cftunnel/sync
+
+# 建一条、配规则、下 DNS、起连接器
+curl -s -X POST http://127.0.0.1:8090/api/cftunnel/tunnels -d '{"name":"home-nas"}'
+curl -s -X POST http://127.0.0.1:8090/api/cftunnel/ingress \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"t1","ingress":[{"hostname":"nas.example.com","service":"https://127.0.0.1:5001",
+        "originRequest":{"noTLSVerify":true,"connectTimeout":"30s"}}]}'
+curl -s -X POST http://127.0.0.1:8090/api/cftunnel/dns -d '{"id":"t1","hostname":"nas.example.com"}'
+curl -s -X POST http://127.0.0.1:8090/api/cftunnel/power -d '{"id":"t1","action":"start"}'
+curl -s 'http://127.0.0.1:8090/api/cftunnel/logs?id=t1&after=0'
+
+# 临时隧道：不需要账号，几秒后 quick.url 里就是分到的域名
+curl -s -X POST http://127.0.0.1:8090/api/cftunnel/quick \
+  -d '{"action":"start","target":"http://127.0.0.1:8090"}'
+
+# 不想联网也能验进程托管：拿一个假的 cloudflared 顶上
+printf '#!/bin/sh\n[ "$1" = --version ] && echo fake && exit 0\ntrap "exit 0" TERM\nwhile :; do sleep 1; done\n' > /tmp/fake-cloudflared
+chmod +x /tmp/fake-cloudflared
+curl -s -X POST http://127.0.0.1:8090/api/cftunnel/settings -d '{"binary_path":"/tmp/fake-cloudflared"}'
+```
+
 ### 单元测试
 
-含 DNS 转发/缓存/分流的端到端用例、各平台命令拼装（networksetup / nmcli / uci / netsh / ip / route）、本地化输出的路由表解析、ICMP 回包匹配等：
+含 DNS 转发/缓存/分流的端到端用例、各平台命令拼装（networksetup / nmcli / uci / netsh / ip / route）、本地化输出的路由表解析、ICMP 回包匹配，以及隧道那一套：打在 httptest 假 Cloudflare 上的接口用例、令牌与凭证互转、真实 config.yml 的解析与渲染往返、拿假 cloudflared 验的进程托管：
 
 ```bash
 go test -race ./...
@@ -639,5 +808,8 @@ go test -race ./...
 - [Go Programming Language](https://golang.org/)
 - [Armon go-socks5 Library](https://github.com/armon/go-socks5)
 - [golang.org/x/net/icmp](https://pkg.go.dev/golang.org/x/net/icmp)
+- [Cloudflare Tunnel 文档](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+- [Cloudflare API：Cloudflare Tunnel](https://developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/)
+- [cloudflared Releases](https://github.com/cloudflare/cloudflared/releases)
 - [Systemd Service Unit Documentation](https://www.freedesktop.org/software/systemd/man/systemd.service.html)
 - [OpenWrt Procd Init Scripts](https://openwrt.org/docs/techref/procd)

@@ -4,6 +4,7 @@
 // 各业务分别在 internal/ 下：
 //
 //	internal/proxy      SOCKS5 代理与流量统计
+//	internal/cftunnel   Cloudflare Tunnel（调 API 管云端隧道 + 托管 cloudflared）
 //	internal/route      路由台账（下发、对账、按域名重新解析）
 //	internal/uplink     出口线路（fwmark 策略路由，让不同代理实例走不同网关）
 //	internal/sockopt    给出站 socket 打平台相关的出口标记
@@ -24,9 +25,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"nettool/internal/api"
+	"nettool/internal/cftunnel"
 	"nettool/internal/dnsserver"
 	"nettool/internal/netconfig"
 	"nettool/internal/proxy"
@@ -61,6 +65,9 @@ type options struct {
 	dnsListen     *string
 	dnsUpstream   *string
 	startDNS      *bool
+
+	cfTunnelFile  *string
+	startCFTunnel *bool
 }
 
 func parseFlags() options {
@@ -88,6 +95,9 @@ func parseFlags() options {
 		dnsListen:     flag.String("dns-listen", "", "本地 DNS 服务监听地址（留空沿用配置文件里的值，默认 0.0.0.0）"),
 		dnsUpstream:   flag.String("dns-upstream", "", "本地 DNS 服务的上游，逗号分隔，如 223.5.5.5,tls://dns.google,https://dns.google/dns-query（仅在配置文件里还没有上游时生效）"),
 		startDNS:      flag.Bool("start-dns", false, "启动时无条件开启本地 DNS 服务（不加则按上次退出时的开关状态恢复）"),
+
+		cfTunnelFile:  flag.String("cftunnel-file", "", "Cloudflare Tunnel 配置文件路径（留空则与路由台账同目录；里面有 API Token 与连接器令牌，权限 0600）"),
+		startCFTunnel: flag.Bool("start-cftunnel", false, "启动时无条件拉起全部 Cloudflare Tunnel 连接器（不加则按上次退出时的开关状态恢复）"),
 	}
 	flag.Parse()
 	return o
@@ -101,6 +111,7 @@ func main() {
 	setupWiFi(opt, statePath)
 	setupDNS(opt, statePath)
 	setupProxy(opt, statePath)
+	setupCFTunnel(opt, statePath)
 
 	serveWeb(opt)
 }
@@ -252,6 +263,30 @@ func setupProxy(opt options, statePath string) {
 	}
 
 	proxy.Default.StartSaved(*opt.startProxy)
+}
+
+// setupCFTunnel 载入 Cloudflare Tunnel 台账，并按各隧道上次的开关状态把
+// cloudflared 连接器拉起来。
+//
+// 这是唯一一个会 fork 子进程的模块，所以顺手在这里挂上退出信号的处理：连接器是
+// 独立进程，本进程直接死掉的话它们会变成孤儿继续挂着隧道，下次启动就成了同一条
+// 隧道跑两个连接器。收到 SIGTERM/SIGINT 时先把它们收掉再退出。
+func setupCFTunnel(opt options, statePath string) {
+	cftunnel.Default.Load(cftunnel.ResolveConfigFile(*opt.cfTunnelFile, statePath))
+	if path := cftunnel.Default.ConfigPath(); path != "" {
+		log.Printf("[CFTunnel] 隧道配置文件: %s", path)
+	}
+
+	cftunnel.Default.StartSaved(*opt.startCFTunnel)
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		s := <-sig
+		log.Printf("[Main] 收到 %s，正在停止 cloudflared 连接器…", s)
+		cftunnel.Default.StopAll()
+		os.Exit(0)
+	}()
 }
 
 // serveWeb 托管内嵌的前端与管理接口，直到进程退出
