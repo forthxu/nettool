@@ -120,7 +120,7 @@ func (m *Manager) persistLocked() {
 		log.Printf("[Uplink] 序列化台账失败: %v", err)
 		return
 	}
-	if err := netutil.WriteFileAtomic(m.path, data, 0o644); err != nil {
+	if err := netutil.WriteFileAtomic(m.path, data, 0o600); err != nil {
 		log.Printf("[Uplink] 写入台账失败 %s: %v", m.path, err)
 	}
 }

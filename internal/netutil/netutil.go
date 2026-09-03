@@ -29,14 +29,17 @@ func IsValidDomain(target string) bool {
 
 // EnsureStateDir 确认某个状态文件真的可写：建好目录，再试写一次。
 // 不试写的话，"目录能建但文件写不了"要等到第一次保存才暴露。
+//
+// 权限一律给到最紧：这个目录里放的是 Cloudflare API Token、Wi-Fi 方案
+// （SSID 能反查位置）、已解析域名的时间线，本机其他用户没有理由读到。
 func EnsureStateDir(path string) error {
 	dir := filepath.Dir(path)
 	if dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
@@ -48,6 +51,11 @@ func EnsureStateDir(path string) error {
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	// WriteFile 的 perm 只在新建时生效。上一次写崩留下的 .tmp 可能还带着
+	// 旧的宽权限，rename 之后就成了正式文件的权限，所以显式再压一次。
+	if err := os.Chmod(tmp, perm); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

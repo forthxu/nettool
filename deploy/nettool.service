@@ -6,9 +6,18 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/usr/local/bin
+# 账号密码走环境变量文件，不写在 ExecStart 里：命令行参数本机任何用户
+# ps 一下就能看见。先建好文件并收紧权限：
+#   printf 'NETTOOL_USER=admin\nNETTOOL_PASS=换成你的密码\n' > /etc/nettool.env
+#   chmod 600 /etc/nettool.env
+EnvironmentFile=/etc/nettool.env
+# -listen 默认 127.0.0.1，管理后台只有本机能开。要在别的机器上打开后台，
+# 改成 -listen 0.0.0.0，但务必先把上面的用户名密码设好——后台能读到 DNS
+# 查询记录、Wi-Fi 方案，还能取出明文 Cloudflare API Token。
+# -socks-listen 同理：默认只听本机，路由器上要给局域网设备用才改 0.0.0.0。
 # 代理与 DNS 的开关状态存在配置文件里，重启后按上次退出前的状态恢复；
 # 想不管上次状态、每次都把代理拉起来，再加上 -start-proxy（DNS 则是 -start-dns）
-ExecStart=/usr/local/bin/nettool -socks-port 8091 -api-port 8090 -user admin -pass your_secure_password
+ExecStart=/usr/local/bin/nettool -socks-port 8091 -api-port 8090
 Restart=always
 RestartSec=5
 

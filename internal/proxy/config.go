@@ -68,7 +68,7 @@ func ResolveConfigFile(flagVal, routeState string) string {
 
 // defaultInstance 是没有任何配置时的起点，与改造前的默认值一致
 func defaultInstance() Instance {
-	return Instance{ID: "p1", Name: "默认代理", Port: "8091", CreatedAt: time.Now()}
+	return Instance{ID: "p1", Name: "默认代理", Port: "8091", Listen: defaultListen, CreatedAt: time.Now()}
 }
 
 // Load 读入上次保存的实例列表与各自的开关状态。
@@ -225,7 +225,7 @@ func (m *Manager) backupLegacyLocked(path string, data []byte) {
 	if _, err := os.Stat(backup); err == nil {
 		return // 已经备份过，别拿新内容盖掉最初那份
 	}
-	if err := netutil.WriteFileAtomic(backup, data, 0o644); err != nil {
+	if err := netutil.WriteFileAtomic(backup, data, 0o600); err != nil {
 		log.Printf("[SOCKS5] 备份旧版配置到 %s 失败: %v", backup, err)
 		return
 	}
@@ -243,6 +243,10 @@ func sanitizeInstance(cfg Instance) Instance {
 		}
 	} else {
 		cfg.Port = "8091"
+	}
+	if err := cfg.validateListen(); err != nil {
+		log.Printf("[SOCKS5] 配置文件里的监听地址 %q 不合法，改用 %s", cfg.Listen, defaultListen)
+		cfg.Listen = defaultListen
 	}
 	if cfg.LegacyOutboundIP != "" && net.ParseIP(cfg.LegacyOutboundIP) == nil {
 		log.Printf("[SOCKS5] 配置文件里的出口 IP %q 不是合法 IP，已忽略", cfg.LegacyOutboundIP)
@@ -282,16 +286,16 @@ func (m *Manager) persistLocked() {
 		log.Printf("[SOCKS5] 序列化配置失败: %v", err)
 		return
 	}
-	if err := netutil.WriteFileAtomic(m.path, data, 0o644); err != nil {
+	if err := netutil.WriteFileAtomic(m.path, data, 0o600); err != nil {
 		log.Printf("[SOCKS5] 写入配置失败 %s: %v", m.path, err)
 	}
 }
 
-// ApplyFlags 把命令行给的端口/代理 DNS 合进**主实例**的配置。
+// ApplyFlags 把命令行给的监听地址/端口/代理 DNS 合进**主实例**的配置。
 // 只有真填了的才覆盖——否则每次带默认参数启动都会把后台调好的值冲掉。
 //
 // 只作用于主实例：命令行参数是单实例时代留下来的，多实例只走 Web 界面与接口。
-func (m *Manager) ApplyFlags(port, dns string) error {
+func (m *Manager) ApplyFlags(listen, port, dns string) error {
 	s := m.Primary()
 	if s == nil {
 		return nil
@@ -299,6 +303,9 @@ func (m *Manager) ApplyFlags(port, dns string) error {
 	cfg := s.Config()
 	changed := false
 
+	if v := strings.TrimSpace(listen); v != "" {
+		cfg.Listen, changed = v, true
+	}
 	if v := strings.TrimSpace(port); v != "" {
 		cfg.Port, changed = v, true
 	}

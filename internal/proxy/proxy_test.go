@@ -406,6 +406,42 @@ func TestRemoveConnectionKeepsNewerIndex(t *testing.T) {
 }
 
 // 命令行只覆盖真填了的那几项，其余沿用上次存下来的；且只作用于主实例
+// 监听地址默认只听本机：SOCKS5 这层没有任何客户端鉴权，一旦默认绑到
+// 0.0.0.0，装上就是一台谁都能用的公开代理。旧台账里没有这个字段，
+// 也必须补成 127.0.0.1 而不是沿用从前的 0.0.0.0。
+func TestListenDefaultsToLoopback(t *testing.T) {
+	m := NewManager()
+	m.Load("")
+	if got := m.Primary().Config().Listen; got != "127.0.0.1" {
+		t.Errorf("新实例监听地址 = %q, 期望 127.0.0.1", got)
+	}
+
+	// 旧配置（v2 但没有 listen 字段）走 sanitizeInstance 也要补上
+	if got := sanitizeInstance(Instance{ID: "p9", Port: "8091"}).Listen; got != "127.0.0.1" {
+		t.Errorf("旧台账补全后的监听地址 = %q, 期望 127.0.0.1", got)
+	}
+	// 手写坏了的地址退回默认，而不是让整条实例消失
+	if got := sanitizeInstance(Instance{ID: "p9", Port: "8091", Listen: "不是IP"}).Listen; got != "127.0.0.1" {
+		t.Errorf("非法监听地址应退回 127.0.0.1, 得到 %q", got)
+	}
+
+	// 显式设成 0.0.0.0 是允许的，路由器上要给局域网设备用就得这么配
+	p := m.Primary()
+	cfg := p.Config()
+	cfg.Listen = "0.0.0.0"
+	if err := p.SetConfig(cfg); err != nil {
+		t.Fatalf("设置 0.0.0.0 应当被接受: %v", err)
+	}
+	if got := p.Config().Listen; got != "0.0.0.0" {
+		t.Errorf("监听地址 = %q, 期望 0.0.0.0", got)
+	}
+
+	cfg.Listen = "不是IP"
+	if err := p.SetConfig(cfg); err == nil {
+		t.Error("非法监听地址应当报错")
+	}
+}
+
 func TestApplyProxyFlagsOverridesOnlyWhatIsGiven(t *testing.T) {
 	m := NewManager()
 	m.Load("") // 不落盘
@@ -416,14 +452,14 @@ func TestApplyProxyFlagsOverridesOnlyWhatIsGiven(t *testing.T) {
 		t.Fatalf("准备配置失败: %v", err)
 	}
 
-	if err := m.ApplyFlags("", ""); err != nil {
+	if err := m.ApplyFlags("", "", ""); err != nil {
 		t.Fatalf("应用命令行参数失败: %v", err)
 	}
 	if got := p.Config(); got.Port != "1080" || got.DNS != "223.5.5.5:53" {
 		t.Errorf("没给参数时不该动已有配置, 得到 %q / %q", got.Port, got.DNS)
 	}
 
-	if err := m.ApplyFlags("1081", ""); err != nil {
+	if err := m.ApplyFlags("", "1081", ""); err != nil {
 		t.Fatalf("应用命令行参数失败: %v", err)
 	}
 	got := p.Config()
@@ -434,7 +470,7 @@ func TestApplyProxyFlagsOverridesOnlyWhatIsGiven(t *testing.T) {
 		t.Errorf("只给了端口，代理 DNS 被冲掉了: %q", got.DNS)
 	}
 
-	if err := m.ApplyFlags("", "8.8.8"); err == nil {
+	if err := m.ApplyFlags("", "", "8.8.8"); err == nil {
 		t.Error("非法 DNS 应当报错")
 	}
 }

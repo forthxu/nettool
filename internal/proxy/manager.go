@@ -10,6 +10,7 @@ package proxy
 import (
 	"fmt"
 	"log"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,11 +19,19 @@ import (
 	"nettool/internal/sockopt"
 )
 
+// defaultListen 是新实例以及旧台账里没有 listen 字段时的监听地址
+const defaultListen = "127.0.0.1"
+
 // Instance 是一个代理实例的配置，也是台账与接口共用的形状
 type Instance struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Port string `json:"port"`
+	// Listen 是监听地址，空等于 127.0.0.1。默认只听本机是有意的：
+	// SOCKS5 这边没有任何客户端鉴权（conf.Rules 用的是 socks5.PermitAll），
+	// 绑 0.0.0.0 就成了一台谁都能用的开放代理，出口 IP 记的是机主。
+	// 路由器上要给局域网设备用，把它显式改成 0.0.0.0。
+	Listen string `json:"listen,omitempty"`
 	// UplinkID 是本实例的出口，空表示走系统默认线路。
 	// 出口只有这一个来源：走哪个网关是路由查询决定的，而 mark 决定查哪张表。
 	UplinkID  string    `json:"uplink_id,omitempty"`
@@ -40,6 +49,10 @@ func (c Instance) normalized() Instance {
 	c.ID = strings.TrimSpace(c.ID)
 	c.Name = strings.TrimSpace(c.Name)
 	c.Port = strings.TrimSpace(c.Port)
+	c.Listen = strings.TrimSpace(c.Listen)
+	if c.Listen == "" {
+		c.Listen = defaultListen
+	}
 	c.UplinkID = strings.TrimSpace(c.UplinkID)
 	c.DNS = strings.TrimSpace(c.DNS)
 	c.LegacyOutboundIP = strings.TrimSpace(c.LegacyOutboundIP)
@@ -56,6 +69,13 @@ func (c Instance) validatePort() error {
 	n, err := strconv.Atoi(c.Port)
 	if err != nil || n < 1 || n > 65535 {
 		return fmt.Errorf("端口 %q 不合法", c.Port)
+	}
+	return nil
+}
+
+func (c Instance) validateListen() error {
+	if net.ParseIP(c.Listen) == nil {
+		return fmt.Errorf("监听地址 %q 不是合法 IP", c.Listen)
 	}
 	return nil
 }

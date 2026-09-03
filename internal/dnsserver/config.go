@@ -100,7 +100,7 @@ func (s *Server) persistLocked() {
 		log.Printf("[DNS] 序列化配置失败: %v", err)
 		return
 	}
-	if err := netutil.WriteFileAtomic(configPath, data, 0o644); err != nil {
+	if err := netutil.WriteFileAtomic(configPath, data, 0o600); err != nil {
 		log.Printf("[DNS] 写入配置失败 %s: %v", configPath, err)
 	}
 }

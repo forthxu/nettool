@@ -3,9 +3,15 @@
 nettool
 *.exe
 
-# 运行时生成的路由台账与 Wi-Fi 配置档
+# 运行时生成的六份配置。找不到可写的系统目录时它们会落在当前目录，
+# 其中 cftunnel.json 里有 Cloudflare API Token 与各隧道的连接器令牌，
+# uplinks.json 里有 PF 引用令牌与网关拓扑，千万别提交。
 routes.json
 net-profiles.json
+cftunnel.json
+uplinks.json
+dns.json
+proxy.json
 
 # 编辑器 / 系统杂项
 .DS_Store

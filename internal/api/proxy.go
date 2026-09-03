@@ -96,6 +96,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 			ID        string  `json:"id"`
 			Name      string  `json:"name"`
 			SocksPort string  `json:"socks_port"`
+			Listen    *string `json:"listen"`    // 指针：没传就保持原样，别把用户设的 0.0.0.0 悄悄改回本机
 			UplinkID  *string `json:"uplink_id"` // 指针：区分"没传"和"传了空串（解绑）"
 			DNS       string  `json:"dns"`
 		}
@@ -118,6 +119,9 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		cfg.DNS = req.DNS
 		if req.Name != "" {
 			cfg.Name = req.Name
+		}
+		if req.Listen != nil {
+			cfg.Listen = *req.Listen
 		}
 		if req.UplinkID != nil {
 			cfg.UplinkID = *req.UplinkID
@@ -183,6 +187,8 @@ func proxyStatusPayload(s *proxysrv.Server) map[string]interface{} {
 		"running":             running,
 		"proxy_state":         map[bool]string{true: "running", false: "stopped"}[running],
 		"socks_port":          cfg.Port,
+		"listen":              cfg.Listen,
+		"egress_check_url":    egressCheckURL,
 		"uplink_id":           cfg.UplinkID,
 		"dns":                 cfg.DNS,
 		"started_at":          nil, // 本实例最近一次启动（改配置会重启）
@@ -293,8 +299,19 @@ func handleProxyInstances(w http.ResponseWriter, r *http.Request) {
 }
 
 // 出口探测服务：与 README 中的
-// curl --socks5-hostname 127.0.0.1:<port> 'https://myip.ipip.net/' 等价
-const egressCheckURL = "https://myip.ipip.net/"
+// curl --socks5-hostname 127.0.0.1:<port> 'https://myip.ipip.net/' 等价。
+//
+// 这是本程序唯一一个会主动连第三方的功能，而且只在用户点「检测出口」时才发。
+// 换一家（或换成自建的回显服务）用 -egress-check-url，或环境变量
+// NETTOOL_EGRESS_CHECK_URL。
+var egressCheckURL = "https://myip.ipip.net/"
+
+// SetEgressCheckURL 覆盖出口探测用的地址，空串表示沿用默认
+func SetEgressCheckURL(u string) {
+	if u = strings.TrimSpace(u); u != "" {
+		egressCheckURL = u
+	}
+}
 
 var egressIPPattern = regexp.MustCompile(`\b(\d{1,3}(?:\.\d{1,3}){3})\b`)
 
@@ -385,7 +402,9 @@ func handleEgressIP(w http.ResponseWriter, r *http.Request) {
 
 	raw := strings.TrimSpace(string(body))
 	egressIP := egressIPPattern.FindString(raw)
-	log.Printf("[Egress] 实例「%s」出口探测成功 (端口 %s): %s", cfg.Name, cfg.Port, raw)
+	// 只记「成功了」，不把探到的公网 IP 写进日志：日志经常被收集、被贴进
+	// issue，机主的真实出口 IP 不该跟着一起走。结果照常回给发起请求的人。
+	log.Printf("[Egress] 实例「%s」出口探测成功 (端口 %s)", cfg.Name, cfg.Port)
 
 	respond(http.StatusOK, map[string]interface{}{
 		"ok":        true,

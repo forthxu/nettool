@@ -19,9 +19,13 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 
 所选页签记忆在 localStorage 中，刷新后回到上次那页。
 
+![SOCKS5 代理页](docs/screenshots/proxy.png)
+
+> 本文所有截图里的 IP、域名、SSID、隧道 ID 与账号名都是演示数据（`example.com`、`192.168.x.x`、`203.0.113.x` 等文档保留地址），不对应任何真实网络。
+
 贯穿全局的几件事：
 
-- **Web 后台登录认证**：`-user` / `-pass` 开启 HTTP Basic Auth，保护控制台与全部 API；两个都留空则不鉴权。
+- **Web 后台登录认证**：`-user` / `-pass`（或 `NETTOOL_USER` / `NETTOOL_PASS`）开启 HTTP Basic Auth，保护控制台与全部 API；两个都留空则不鉴权——所以后台默认只听 `127.0.0.1`。
 - **按上次的状态启动**：SOCKS5 代理、DNS 服务与各条 Cloudflare 隧道的开关状态跟着配置一起存盘，进程重启（升级、崩溃、机器重启）后照着上次退出前的样子恢复——上次开着就自动起来，上次点过「停止」就保持停止，不用每次再去后台点一次。全新安装（还没有配置文件）时都不启动，避免装好就抢端口；`-start-proxy` / `-start-dns` / `-start-cftunnel` 则是无条件启动，不看上次状态。
 - **配置各自独立成 JSON**：路由台账、出口线路台账、Wi-Fi 配置档、DNS 配置、代理配置、隧道配置六份文件互不干扰，一律先写临时文件再原子替换，掉电不会留下半个文件。其中 `cftunnel.json` 里有机密（Cloudflare API Token 与各隧道的连接器令牌），权限是 `0600` 而不是 `0644`。
 - **系统服务模板**：`deploy/` 下有 Linux systemd、OpenWrt procd 与 Windows 计划任务三份配置，开机自启 + 崩溃自动重启。
@@ -73,7 +77,7 @@ Go 编写，单个二进制、无外部运行依赖，所有操作都在内嵌�
 
 ### 代理自己的 DNS
 
-`-dns`，或后台「代理 DNS」：客户端用 `--socks5-hostname` 时域名是交给**代理**解析的，代理默认用系统 DNS。在被污染的网络里系统 DNS 会返回假地址，这时哪怕流量出口在国外也连不上（实测 `www.google.com` 系统 DNS 解析出 `203.0.113.10` → 超时；境外 DNS 解析出 `203.0.113.20` → 0.4 秒 204）。填一个境外 DNS（如 `8.8.8.8`，只填 IP 会自动补 `:53`）即可，**DNS 查询本身也带上实例的出口标记**，跟数据连接走同一条线路出去，所以查询不经过被污染的线路，也不会漏到默认网关。留空则维持系统解析。
+`-dns`，或后台「代理 DNS」：客户端用 `--socks5-hostname` 时域名是交给**代理**解析的，代理默认用系统 DNS。如果所在网络的 DNS 会对某些域名返回错误的地址，这时哪怕流量出口选对了也连不上——症状是连接直接超时，而换一个 DNS 解析出来的地址却能秒通。填一个可信的 DNS（如 `8.8.8.8`，只填 IP 会自动补 `:53`）即可，**DNS 查询本身也带上实例的出口标记**，跟数据连接走同一条线路出去，所以查询不经过被污染的线路，也不会漏到默认网关。留空则维持系统解析。
 
 ### 实际出口公网 IP 探测
 
@@ -89,6 +93,8 @@ tcpdump -ni eth0 -e 'tcp port 443'           # 逐实例发一次请求，对比
 ---
 
 ## 二、出口线路（按实例选网关）
+
+![出口线路](docs/screenshots/routes.png)
 
 **这是「让不同端口走不同网关」的正确做法**，位置在「路由管理」页签的最上方。
 
@@ -193,6 +199,8 @@ pfctl -a com.apple/nettool -s rules
 
 ## 三、路由管理（多路由器网关调度）
 
+> 界面在「路由管理」页签的下半部分，与上面「出口线路」同一张截图。
+
 自定义托管路由增删 + 操作系统内核路由实时审计，两张表都在同一页。
 
 ### 按域名添加
@@ -227,6 +235,8 @@ pfctl -a com.apple/nettool -s rules
 
 ## 四、网卡配置与 Wi-Fi 自动切换
 
+![网卡配置与 Wi-Fi 配置档](docs/screenshots/nic.png)
+
 ### 网卡配置（IP / 掩码 / 网关 / DNS）
 
 - 「网卡配置」页列出本机每张网卡的配置入口、当前方式（DHCP / 手动）、IP、掩码、网关、手工 DNS，并可直接改成 DHCP 或手动指定。
@@ -253,6 +263,8 @@ pfctl -a com.apple/nettool -s rules
 
 ## 五、本地 DNS 服务（多形态上游 + 按域名分流）
 
+![本地 DNS 服务](docs/screenshots/dns.png)
+
 - 「DNS 服务」页可随时启停一个本机 DNS 解析器（**UDP + TCP 同时监听**），局域网里的机器把 DNS 指向本机 IP 即可使用。开关状态存在 `dns.json` 里，程序启动时按上次退出前的状态恢复（第一次运行不启动）；加 `-start-dns` 则无条件启动。
 - **四种上游形态**：普通 `udp`（53）、`tcp`（53）、**DoT**（DNS over TLS，853）、**DoH**（DNS over HTTPS，RFC 8484）。地址支持直接粘 `tls://1.1.1.1@one.one.one.one`、`https://dns.google/dns-query`、`udp://223.5.5.5` 等写法，类型自动识别；只填 IP 会按类型补默认端口。
 - **按域名分流**：每个上游可以写一串域名（含子域），只有命中的查询才交给它；没写域名的上游作为兜底。命中时按**最长后缀**优先——`mail.example.com` 的规则会盖过 `example.com`。这套分流和「路由管理」里按域名指定网关的思路一致：把国内域名留给运营商 DNS，其余走 DoH/DoT。
@@ -269,6 +281,8 @@ pfctl -a com.apple/nettool -s rules
 ---
 
 ## 六、Cloudflare 隧道（内网服务对外发布）
+
+![Cloudflare 隧道](docs/screenshots/cf.png)
 
 前面几件事都在管「出去的流量走哪条线」，这一页管反方向：**让外面能进来，而不开任何入站端口**。
 
@@ -373,6 +387,10 @@ cloudflared 的隧道有两种托管方式，是隧道自身在 Cloudflare 那�
 ---
 
 ## 七、连通性诊断（Ping / 路由追踪）
+
+![Ping](docs/screenshots/ping.png)
+
+![路由追踪](docs/screenshots/trace.png)
 
 前面几件事都在决定「流量走哪条线」，这两页用来验证它到底走没走成。
 
@@ -517,12 +535,17 @@ make all-platforms
 ## 运行与参数
 
 ```bash
-sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_password
+sudo ./nettool -socks-port 8091 -api-port 8090
 ```
+
+> **默认只听本机。** 管理后台、SOCKS5、DNS 三个口默认都绑 `127.0.0.1`，装完不会对局域网敞开任何东西。要给别的设备用，各自加 `-listen` / `-socks-listen` / `-dns-listen 0.0.0.0`——管理后台一旦这么开，请务必同时设好账号密码，它能读到 DNS 查询记录、Wi-Fi 方案，还能取出明文 Cloudflare API Token。
+>
+> 密码优先读环境变量 `NETTOOL_USER` / `NETTOOL_PASS`，`-user` / `-pass` 只是兜底：写在命令行里的密码，本机任何用户 `ps` 一下就能看见。`deploy/` 下的三份自启模板都已经改成走环境变量。
 
 **代理**
 
 - `-socks-port`: SOCKS5 代理监听端口（留空沿用配置文件里的值，默认 `8091`）
+- `-socks-listen`: SOCKS5 监听地址（留空沿用配置文件里的值，默认 `127.0.0.1`）。SOCKS5 这层**没有任何客户端鉴权**，改成 `0.0.0.0` 就是一台谁都能用的公开代理，出口 IP 记的是本机——路由器上要给局域网设备用才这么设，别用在公网机器上。也可以在后台「监听地址」下拉框里改，或在 `proxy.json` 里给每个实例单独写
 - `-start-proxy`: 启动时**无条件**开启 SOCKS5 代理；不加则按上次退出前的开关状态恢复（第一次运行为不启动，在 Web 后台点「启动代理」）
 - `-dns`: 代理解析域名用的上游 DNS（如 `8.8.8.8`），查询跟着实例绑定的出口线路走；留空沿用配置文件里的值，要改回系统 DNS 在 Web 后台清空即可
 - `-proxy-config-file`: 代理配置文件路径（留空则与路由台账同目录的 `proxy.json`）
@@ -539,8 +562,10 @@ sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_passw
 
 **Web 后台**
 
+- `-listen`: Web 管理后台监听地址（默认 `127.0.0.1`，只有本机能打开）。改成 `0.0.0.0` 前请先设好下面的账号密码
 - `-api-port`: Web 管理后台与 API 端口（默认 `8090`）
-- `-user` / `-pass`: Web 控制台登录用户名与密码（留空则不启用认证）
+- `-user` / `-pass`: Web 控制台登录用户名与密码（留空则不启用认证；建议改用 `NETTOOL_USER` / `NETTOOL_PASS` 环境变量，别让密码出现在 `ps` 里）
+- `-egress-check-url`: 「检测出口 IP」按钮请求的地址（默认 `https://myip.ipip.net/`）。这是本程序唯一一处会主动连第三方的地方，而且只在点按钮时才发；不想用它就换成自建的回显服务，环境变量 `NETTOOL_EGRESS_CHECK_URL` 同效
 
 **路由**
 
@@ -556,7 +581,7 @@ sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_passw
 **DNS 服务**
 
 - `-start-dns`: 启动时**无条件**开启本地 DNS 服务；不加则按上次退出前的开关状态恢复（第一次运行为不启动，在 Web 后台点「启动 DNS」）
-- `-dns-listen`: 监听地址（留空沿用配置文件里的值，默认 `0.0.0.0`）
+- `-dns-listen`: 监听地址（留空沿用配置文件里的值，默认 `127.0.0.1`）。绑 `0.0.0.0` 就是一台对外开放的递归解析器，既可能被拿去做反射放大，查询记录也一并送人；给局域网设备当 DNS 用时才改
 - `-dns-port`: 监听端口（留空沿用配置文件里的值，默认 `53`，需要 root）
 - `-dns-upstream`: 上游列表，逗号分隔，如 `223.5.5.5,tls://dns.alidns.com,https://doh.pub/dns-query`；**仅在配置文件里还没有上游时生效**，否则每次带参数启动都会冲掉后台调好的列表
 - `-dns-config-file`: DNS 服务配置文件路径（留空则与路由台账同目录的 `dns.json`）
@@ -569,6 +594,40 @@ sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_passw
 > API Token、账号、隧道与 ingress 规则都在 Web 后台配，没有对应的命令行参数——它们是要在界面上反复改的东西，写进启动参数只会和存档打架。
 
 > Ping 与路由追踪没有命令行参数，全部在 Web 后台按次发起。
+
+---
+
+## 隐私与数据
+
+这是一个网络工具，天然会碰到相当敏感的东西。把它一次说清楚：
+
+**存在哪、存了什么。** 六份配置都在同一个目录（`-state-file` 决定，默认 `/var/lib/nettool/`，Windows 是 `%ProgramData%\nettool\`），目录 `0700`、文件一律 `0600`：
+
+| 文件 | 里面是什么 |
+| --- | --- |
+| `cftunnel.json` | Cloudflare API Token 与各隧道的连接器令牌 |
+| `net-profiles.json` | Wi-Fi SSID 列表与每个 SSID 对应的 IP/DNS 方案（SSID 能反查地理位置） |
+| `routes.json` | 托管的域名、解析出的 IP 与解析时间 |
+| `uplinks.json` | 网关拓扑、PF 引用令牌 |
+| `dns.json` | 上游 DNS 与按域名分流的规则 |
+| `proxy.json` | 各实例的端口、监听地址、出口绑定 |
+
+`.gitignore` 已经把这六份全都排除了——它们在找不到可写系统目录时会落在当前目录。
+
+**只在内存里、不落盘的：** DNS 最近 60 条查询记录（客户端 IP、域名、解析结果、耗时，`GET /api/dns/stats`）和 SOCKS5 的活动连接（连接关闭即删，只留累计字节数）。进程退出就没了，但**进程活着的时候，能打开后台的人就能看到**——这正是后台默认只听 `127.0.0.1` 的原因。
+
+**会连外面的地方，一共四处，没有一处是自动的遥测：**
+
+- `api.cloudflare.com` —— 你在隧道页操作时才调，用你自己的 Token
+- GitHub Releases —— 你点「下载安装 cloudflared」时才拉
+- `-egress-check-url`（默认 `https://myip.ipip.net/`）—— 你点「检测出口 IP」时才发一次；结果只回给你，**不写进日志**
+- 上游 DNS —— 你自己在 `dns.json` 里配的那些
+
+前端不外链任何 CDN：Tailwind 的浏览器构建随二进制一起发（`static/tailwind-3.4.17.js`），所以离线和内网里界面照样是完整的，也不会每开一次后台就把你的 IP 送给第三方。除此之外没有统计、没有崩溃上报、没有自动更新检查。
+
+**密码与令牌。** 连接器令牌只进 `cftunnel.json`，接口永远不返回明文（只说有没有），启动 cloudflared 时走环境变量 `TUNNEL_TOKEN`。API Token 界面上默认脱敏，只有点小眼睛（`GET /api/cftunnel/token`）能取明文，每取一次日志记一行。后台自己的密码建议走 `NETTOOL_USER` / `NETTOOL_PASS`，别写命令行——同一台机器上 `ps` 是人人可见的。
+
+**⚠️ 唯一需要你自己拿主意的地方：** Basic Auth 跑在明文 HTTP 上，凭据在链路上是可嗅探的。默认只听本机时这不成问题；真要跨机器访问，请套一层反向代理加 TLS，或者干脆走 SSH 端口转发。
 
 ---
 
@@ -585,7 +644,12 @@ sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_passw
    ```bash
    sudo cp deploy/nettool.service /etc/systemd/system/
    ```
-3. 修改服务文件中的密码及参数（如需）：
+3. 建凭据文件（服务文件用 `EnvironmentFile` 读它，密码不进命令行）：
+   ```bash
+   sudo sh -c 'printf "NETTOOL_USER=admin\nNETTOOL_PASS=换成你的密码\n" > /etc/nettool.env'
+   sudo chmod 600 /etc/nettool.env
+   ```
+   要让别的机器打开后台，再给 `ExecStart` 加上 `-listen 0.0.0.0`（前提是上面的密码已经设好）：
    ```bash
    sudo nano /etc/systemd/system/nettool.service
    ```
@@ -606,7 +670,19 @@ sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_passw
    ```bash
    chmod +x /etc/init.d/nettool
    ```
-3. 启停与开机自启配置：
+3. 建凭据文件。路由器上通常要让局域网设备用代理、也要能从别的机器打开后台，
+   所以这里把两个监听地址都放开——那就更要设好密码：
+   ```sh
+   cat > /etc/nettool.env <<'EOF'
+   NETTOOL_USER=admin
+   NETTOOL_PASS=换成你的密码
+   NETTOOL_LISTEN=0.0.0.0
+   NETTOOL_SOCKS_LISTEN=0.0.0.0
+   EOF
+   chmod 600 /etc/nettool.env
+   ```
+   不建这个文件也能跑，只是两个口都只听 `127.0.0.1`，等于只有路由器自己能用。
+4. 启停与开机自启配置：
    ```bash
    /etc/init.d/nettool enable
    /etc/init.d/nettool start
@@ -629,6 +705,8 @@ sudo ./nettool -socks-port 8091 -api-port 8090 -user admin -pass my_secure_passw
    ```
 
 > 用的是计划任务而不是 Windows 服务：nettool 是普通控制台程序，不响应服务控制消息，`sc.exe create` 注册后会以 1053 失败，除非再套一层 NSSM。计划任务不需要额外依赖，同样能做到开机自启（SYSTEM 身份）+ 崩溃自动重启。
+>
+> 密码不进计划任务的命令行（`Win32_Process` 的 `CommandLine` 普通用户就读得到）：脚本会在二进制旁边生成 `nettool-env.cmd`，用 `icacls` 收成只有 SYSTEM 与 Administrators 可读，任务启动时先 `call` 它再拉起进程。卸载时这个文件会一并删掉。
 >
 > ⚠️ Windows 上路由下发、网卡配置、ping / traceroute 都需要管理员权限，所以脚本固定用 SYSTEM 账户运行；手工启动时请用管理员身份的终端。
 

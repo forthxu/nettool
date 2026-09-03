@@ -23,9 +23,11 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,7 +47,10 @@ type options struct {
 	socksPort       *string
 	proxyDNS        *string
 	proxyConfigFile *string
+	socksListen     *string
+	apiListen       *string
 	apiPort         *string
+	egressCheckURL  *string
 	authUser        *string
 	authPass        *string
 	stateFile       *string
@@ -75,9 +80,12 @@ func parseFlags() options {
 		socksPort:       flag.String("socks-port", "", "SOCKS5 代理端口（留空沿用上次保存的值，默认 8091）"),
 		proxyDNS:        flag.String("dns", "", "代理解析域名用的上游 DNS（如 8.8.8.8 或 8.8.8.8:53），留空沿用上次保存的值"),
 		proxyConfigFile: flag.String("proxy-config-file", "", "SOCKS5 代理配置文件路径（留空则与路由台账同目录）"),
+		socksListen:     flag.String("socks-listen", "", "SOCKS5 代理监听地址（留空沿用上次保存的值，默认 127.0.0.1；要让局域网设备用这个代理才改成 0.0.0.0）"),
+		apiListen:       flag.String("listen", "127.0.0.1", "Web 界面与接口的监听地址。默认只听本机；改成 0.0.0.0 会把管理面（含 DNS 查询记录、Wi-Fi 方案、明文 Cloudflare Token 接口）暴露给整个局域网，务必同时设置 -user/-pass"),
 		apiPort:         flag.String("api-port", "8090", "API management and Web UI port"),
-		authUser:        flag.String("user", "", "Web UI & API username (leave empty for no auth)"),
-		authPass:        flag.String("pass", "", "Web UI & API password (leave empty for no auth)"),
+		egressCheckURL:  flag.String("egress-check-url", "", "「检测出口 IP」按钮请求的地址（留空用内置的 https://myip.ipip.net/；也可用环境变量 NETTOOL_EGRESS_CHECK_URL 换成自建的回显服务）"),
+		authUser:        flag.String("user", "", "Web UI & API username（留空则不鉴权，仅在监听 127.0.0.1 时才安全；也可用环境变量 NETTOOL_USER）"),
+		authPass:        flag.String("pass", "", "Web UI & API password（留空则不鉴权；也可用环境变量 NETTOOL_PASS，避免密码出现在 ps 的命令行里）"),
 		stateFile:       flag.String("state-file", "", "路由台账文件路径（留空自动选择：Linux/macOS 用 /var/lib/nettool/routes.json，Windows 用 %ProgramData%\\nettool\\routes.json，都不可写则退到用户目录）"),
 		restoreRoutes:   flag.Bool("restore-routes", false, "启动时自动重新下发台账中已失效的路由"),
 		domainRefresh:   flag.Duration("domain-refresh", 5*time.Minute, "域名路由自动重新解析间隔（0 表示关闭）"),
@@ -92,7 +100,7 @@ func parseFlags() options {
 
 		dnsConfigFile: flag.String("dns-config-file", "", "DNS 服务配置文件路径（留空则与路由台账同目录）"),
 		dnsPort:       flag.String("dns-port", "", "本地 DNS 服务监听端口（留空沿用配置文件里的值，默认 53）"),
-		dnsListen:     flag.String("dns-listen", "", "本地 DNS 服务监听地址（留空沿用配置文件里的值，默认 0.0.0.0）"),
+		dnsListen:     flag.String("dns-listen", "", "本地 DNS 服务监听地址（留空沿用配置文件里的值，默认 127.0.0.1；要给局域网设备当 DNS 才改成 0.0.0.0）"),
 		dnsUpstream:   flag.String("dns-upstream", "", "本地 DNS 服务的上游，逗号分隔，如 223.5.5.5,tls://dns.google,https://dns.google/dns-query（仅在配置文件里还没有上游时生效）"),
 		startDNS:      flag.Bool("start-dns", false, "启动时无条件开启本地 DNS 服务（不加则按上次退出时的开关状态恢复）"),
 
@@ -100,6 +108,19 @@ func parseFlags() options {
 		startCFTunnel: flag.Bool("start-cftunnel", false, "启动时无条件拉起全部 Cloudflare Tunnel 连接器（不加则按上次退出时的开关状态恢复）"),
 	}
 	flag.Parse()
+
+	// 凭据优先读环境变量，命令行参数只是兜底：写在 ExecStart 里的密码，
+	// 本机任何用户 ps 一下就能看见。同样的理由见 cftunnel/process.go 里
+	// 连接器令牌走 TUNNEL_TOKEN 而不是 argv 的那段说明。
+	if *o.authUser == "" {
+		*o.authUser = os.Getenv("NETTOOL_USER")
+	}
+	if *o.authPass == "" {
+		*o.authPass = os.Getenv("NETTOOL_PASS")
+	}
+	if *o.egressCheckURL == "" {
+		*o.egressCheckURL = os.Getenv("NETTOOL_EGRESS_CHECK_URL")
+	}
 	return o
 }
 
@@ -258,7 +279,7 @@ func setupProxy(opt options, statePath string) {
 		log.Printf("[SOCKS5] 代理配置文件: %s", path)
 	}
 	// 命令行参数只作用于主实例：它们是单实例时代留下来的，多实例只走 Web 界面
-	if err := proxy.Default.ApplyFlags(*opt.socksPort, *opt.proxyDNS); err != nil {
+	if err := proxy.Default.ApplyFlags(*opt.socksListen, *opt.socksPort, *opt.proxyDNS); err != nil {
 		log.Fatalf("[SOCKS5] 命令行代理配置无效: %v", err)
 	}
 
@@ -296,11 +317,33 @@ func serveWeb(opt options) {
 		log.Fatalf("Failed to create sub filesystem: %v", err)
 	}
 
+	api.SetEgressCheckURL(*opt.egressCheckURL)
 	handler := api.Handler(api.Config{Static: subFS, User: *opt.authUser, Pass: *opt.authPass})
-	addr := fmt.Sprintf("0.0.0.0:%s", *opt.apiPort)
+
+	// 默认只听 127.0.0.1。管理面能读到 DNS 查询记录、Wi-Fi 方案、活动连接，
+	// 还能通过 /api/cftunnel/token 取出明文 Cloudflare API Token，
+	// 绑到 0.0.0.0 等于把这些交给整个局域网。
+	listen := strings.TrimSpace(*opt.apiListen)
+	if listen == "" {
+		listen = "127.0.0.1"
+	}
+	addr := net.JoinHostPort(listen, *opt.apiPort)
+	if !isLoopbackHost(listen) && *opt.authUser == "" && *opt.authPass == "" {
+		log.Printf("[Security] 管理面正监听 %s 且没有开鉴权，局域网内任何人都能读走 DNS 查询记录并取出明文 Cloudflare Token。请加 -user/-pass（或 NETTOOL_USER/NETTOOL_PASS），或去掉 -listen 改回只听本机", addr)
+	}
 	log.Printf("[Web UI & API] Management console running at http://%s", addr)
 
 	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatalf("[Web UI] Server error: %v", err)
 	}
+}
+
+// isLoopbackHost 判断监听地址是不是只有本机能连上。
+// 只用来决定要不要打那句「没鉴权」的警告，判不准也不影响功能。
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

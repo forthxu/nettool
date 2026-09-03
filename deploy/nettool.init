@@ -6,11 +6,41 @@ STOP=10
 USE_PROCD=1
 PROG="/usr/bin/nettool"
 
+# 账号密码与监听地址放在这个文件里，不写进命令行：procd 起的进程，
+# 命令行本机谁都能从 /proc/*/cmdline 读到。
+#   cat > /etc/nettool.env <<'EOF'
+#   NETTOOL_USER=admin
+#   NETTOOL_PASS=换成你的密码
+#   NETTOOL_LISTEN=0.0.0.0
+#   NETTOOL_SOCKS_LISTEN=0.0.0.0
+#   EOF
+#   chmod 600 /etc/nettool.env
+ENV_FILE="/etc/nettool.env"
+
 start_service() {
+    NETTOOL_USER=""
+    NETTOOL_PASS=""
+    NETTOOL_LISTEN=""
+    NETTOOL_SOCKS_LISTEN=""
+    [ -f "$ENV_FILE" ] && . "$ENV_FILE"
+
+    # 两个都默认只听本机。路由器上通常要给局域网设备用，那就在 env 文件里
+    # 显式改成 0.0.0.0——但管理后台一旦对局域网开放，务必同时设好账号密码：
+    # 它能读到 DNS 查询记录、Wi-Fi 方案，还能取出明文 Cloudflare API Token。
+    [ -n "$NETTOOL_LISTEN" ] || NETTOOL_LISTEN="127.0.0.1"
+    [ -n "$NETTOOL_SOCKS_LISTEN" ] || NETTOOL_SOCKS_LISTEN="127.0.0.1"
+
+    if [ "$NETTOOL_LISTEN" != "127.0.0.1" ] && [ -z "$NETTOOL_PASS" ]; then
+        echo "nettool: 管理后台正监听 $NETTOOL_LISTEN 却没设 NETTOOL_PASS，局域网内任何人都能打开后台" >&2
+    fi
+
     procd_open_instance
     # 代理与 DNS 的开关状态存在配置文件里，重启后按上次退出前的状态恢复；
     # 想不管上次状态、每次都把代理拉起来，再加上 -start-proxy（DNS 则是 -start-dns）
-    procd_set_param command "$PROG" -socks-port "8091" -api-port "8090" -user "admin" -pass "your_secure_password"
+    procd_set_param command "$PROG" \
+        -socks-port "8091" -socks-listen "$NETTOOL_SOCKS_LISTEN" \
+        -api-port "8090" -listen "$NETTOOL_LISTEN"
+    procd_set_param env NETTOOL_USER="$NETTOOL_USER" NETTOOL_PASS="$NETTOOL_PASS"
     procd_set_param respawn 3600 5 0
     procd_set_param stdout 1
     procd_set_param stderr 1

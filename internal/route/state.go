@@ -107,7 +107,7 @@ func (rm *Manager) persistLocked() {
 		return
 	}
 
-	if err := netutil.WriteFileAtomic(statePath, data, 0o644); err != nil {
+	if err := netutil.WriteFileAtomic(statePath, data, 0o600); err != nil {
 		log.Printf("[State] 写入台账失败 %s: %v", statePath, err)
 	}
 }

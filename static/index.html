@@ -4,7 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>网络管理工具</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind 的浏览器版就地随二进制发布（v3.4.17，MIT，取自 cdn.tailwindcss.com）。
+         不外链 CDN：每打开一次后台都会把管理员的 IP/UA/Referer 送给第三方，
+         而且内网和离线环境下界面会直接掉样式。升级见 static/README.md。 -->
+    <script src="tailwind-3.4.17.js"></script>
 </head>
 <body class="bg-gray-50 text-gray-900 min-h-screen">
     <div class="max-w-7xl mx-auto px-4 py-8">
@@ -100,6 +103,14 @@
                         <div>
                             <label class="block text-xs text-gray-500 mb-1">监听端口</label>
                             <input type="number" id="new-socks-port" value="8091" oninput="syncEgressCommand()" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label for="new-socks-listen" class="block text-xs text-gray-500 mb-1">监听地址</label>
+                            <select id="new-socks-listen" class="w-full px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                                <option value="127.0.0.1">127.0.0.1（只有本机能用，默认）</option>
+                                <option value="0.0.0.0">0.0.0.0（局域网设备都能用）</option>
+                            </select>
+                            <p class="mt-2 text-xs text-gray-400 leading-relaxed">SOCKS5 这层没有账号密码，选 0.0.0.0 就等于开了一台谁都能用的公开代理，出口 IP 记的是这台机器。路由器上要给别的设备用才改，别在公网机器上这么设。</p>
                         </div>
                         <div>
                             <div class="flex justify-between items-center mb-1">
@@ -1426,6 +1437,8 @@ ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000</pre>
 
             document.getElementById('new-instance-name').value = data.name || '';
             document.getElementById('new-socks-port').value = data.socks_port;
+            setSocksListen(data.listen || '127.0.0.1');
+            if (data.egress_check_url) egressCheckURL = data.egress_check_url;
             document.getElementById('new-dns').value = data.dns || '';
             loadUplinkOptions(data.uplink_id || '');
 
@@ -1514,10 +1527,14 @@ ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000</pre>
             });
         }
 
+        // 探测地址由服务端给（-egress-check-url 可以换成自建的回显服务），
+        // 别在前端写死，否则改了参数这行命令就跟实际发出去的请求对不上
+        let egressCheckURL = 'https://myip.ipip.net/';
+
         function syncEgressCommand() {
             let port = document.getElementById('new-socks-port').value.trim() || '8091';
             document.getElementById('egress-command').textContent =
-                `curl --socks5-hostname 127.0.0.1:${port} 'https://myip.ipip.net/'`;
+                `curl --socks5-hostname 127.0.0.1:${port} '${egressCheckURL}'`;
         }
 
         function copyEgressCommand() {
@@ -1955,6 +1972,16 @@ ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000</pre>
             }
         }
 
+        // 台账里可以手写任意 IP（比如只绑某一张网卡），下拉框里没有就临时补一项，
+        // 免得回显时被静默改成 127.0.0.1，用户一保存就把自己的设置弄丢了
+        function setSocksListen(value) {
+            let sel = document.getElementById('new-socks-listen');
+            if (![...sel.options].some(o => o.value === value)) {
+                sel.add(new Option(value + '（配置文件里指定）', value));
+            }
+            sel.value = value;
+        }
+
         async function updateProxyConfig() {
             let port = document.getElementById('new-socks-port').value.trim();
             if (!port) return;
@@ -1967,6 +1994,7 @@ ip rule add priority 301 fwmark 0x40000000/0xff000000 table 7000</pre>
                         id: selectedInstance,
                         name: document.getElementById('new-instance-name').value.trim(),
                         socks_port: port,
+                        listen: document.getElementById('new-socks-listen').value,
                         uplink_id: document.getElementById('uplink-select').value,
                         dns: document.getElementById('new-dns').value.trim(),
                     })

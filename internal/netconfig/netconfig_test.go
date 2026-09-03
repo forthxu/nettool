@@ -644,7 +644,7 @@ func TestWiFiIdentity(t *testing.T) {
 func TestNetProfileMatch(t *testing.T) {
 	s := &ProfileStore{profiles: map[string]Profile{
 		"DemoNet_5G": {SSID: "DemoNet_5G", Service: "Wi-Fi"},
-		"公司":        {SSID: "公司", NetworkID: "fingerprint-abc", Service: "Wi-Fi"},
+		"公司":         {SSID: "公司", NetworkID: "fingerprint-abc", Service: "Wi-Fi"},
 	}}
 
 	if p, ok := s.match(wifiIdentity{SSID: "DemoNet_5G"}); !ok || p.Service != "Wi-Fi" {

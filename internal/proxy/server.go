@@ -34,6 +34,7 @@ type Server struct {
 	name string
 
 	port     string
+	listen   string // 监听地址，默认 127.0.0.1；绑 0.0.0.0 就是一台无鉴权的公开代理
 	uplinkID string // 绑定的出口线路，空表示走系统默认线路
 	dns      string // 代理解析域名用的上游 DNS，空表示用系统的
 
@@ -148,13 +149,14 @@ func (p *Server) Config() Instance {
 
 func (p *Server) configLocked() Instance {
 	return Instance{
-		ID: p.id, Name: p.name, Port: p.port, UplinkID: p.uplinkID,
+		ID: p.id, Name: p.name, Port: p.port, Listen: p.listen, UplinkID: p.uplinkID,
 		DNS: p.dns, Running: p.wantRunning, CreatedAt: p.createdAt,
 	}
 }
 
 func (p *Server) applyConfigLocked(cfg Instance) {
-	p.name, p.port, p.uplinkID, p.dns = cfg.Name, cfg.Port, cfg.UplinkID, cfg.DNS
+	cfg = cfg.normalized() // 旧台账里没有 listen 字段，这里补上默认值
+	p.name, p.port, p.listen, p.uplinkID, p.dns = cfg.Name, cfg.Port, cfg.Listen, cfg.UplinkID, cfg.DNS
 }
 
 func (p *Server) StartedAt() time.Time {
@@ -186,6 +188,9 @@ func (p *Server) validate(cfg Instance) (Instance, error) {
 		cfg.ID = p.id
 	}
 	if err := cfg.validatePort(); err != nil {
+		return cfg, err
+	}
+	if err := cfg.validateListen(); err != nil {
 		return cfg, err
 	}
 	// 端口冲突要给出实例名，否则用户只会看到一句看不懂的 bind: address already in use
@@ -283,7 +288,7 @@ func (p *Server) startLocked(cfg Instance) error {
 		return fmt.Errorf("创建 SOCKS5 服务失败: %v", err)
 	}
 
-	addr := fmt.Sprintf("0.0.0.0:%s", cfg.Port)
+	addr := net.JoinHostPort(cfg.Listen, cfg.Port)
 	rawListener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("监听 %s 失败: %v", addr, err)

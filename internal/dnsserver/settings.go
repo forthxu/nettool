@@ -74,7 +74,10 @@ type Settings struct {
 
 func defaultSettings() Settings {
 	return Settings{
-		Listen:    "0.0.0.0",
+		// 默认只听本机：绑 0.0.0.0 就是一台对外开放的递归解析器，
+		// 既能被拿去做反射放大，查询记录（谁在解析什么域名）也一并送人。
+		// 要给局域网设备用，在界面上或 -dns-listen 改成 0.0.0.0。
+		Listen:    "127.0.0.1",
 		Port:      "53",
 		Strategy:  strategySequential,
 		TimeoutMS: 5000,

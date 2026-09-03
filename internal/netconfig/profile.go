@@ -111,7 +111,7 @@ func (s *ProfileStore) persistLocked() {
 		log.Printf("[NetConfig] 序列化配置档失败: %v", err)
 		return
 	}
-	if err := netutil.WriteFileAtomic(s.path, data, 0o644); err != nil {
+	if err := netutil.WriteFileAtomic(s.path, data, 0o600); err != nil {
 		log.Printf("[NetConfig] 写入配置档失败 %s: %v", s.path, err)
 	}
 }

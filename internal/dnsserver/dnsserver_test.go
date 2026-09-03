@@ -92,7 +92,7 @@ func TestValidateSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("空配置应当被补成默认值: %v", err)
 	}
-	if s.Listen != "0.0.0.0" || s.Port != "53" || s.Strategy != strategySequential {
+	if s.Listen != "127.0.0.1" || s.Port != "53" || s.Strategy != strategySequential {
 		t.Errorf("默认值不对: %+v", s)
 	}
 	if s.TimeoutMS != 5000 || s.CacheSize != 4096 {
