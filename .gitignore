@@ -1,5 +1,6 @@
-# 编译产物（make all-platforms 输出到 build/）
+# 编译产物（make all-platforms 输出到 build/，Release 工作流输出到 dist/）
 /build/
+/dist/
 nettool
 *.exe
 
